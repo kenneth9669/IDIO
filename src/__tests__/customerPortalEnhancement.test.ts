@@ -204,13 +204,13 @@ describe('Customer Portal Enhancement & Booking Experience Test Suite', () => {
       const check2 = checkCameraAvailability(cam, '2026-11-14', '2026-11-18', [existingReservation]);
       expect(check2.isAvailable).toBe(false);
 
-      // Non-overlapping range (after)
-      const check3 = checkCameraAvailability(cam, '2026-11-16', '2026-11-20', [existingReservation]);
-      expect(check3.isAvailable).toBe(true);
+      // Non-overlapping adjacent range starting immediately after previous booking (Nov 16 to Nov 20)
+      const adjacentCheck = checkCameraAvailability(cam, '2026-11-16', '2026-11-20', [existingReservation]);
+      expect(adjacentCheck.isAvailable).toBe(true);
 
-      // Non-overlapping range (before)
-      const check4 = checkCameraAvailability(cam, '2026-11-01', '2026-11-08', [existingReservation]);
-      expect(check4.isAvailable).toBe(true);
+      // Non-overlapping range immediately preceding (Nov 01 to Nov 09)
+      const precedingCheck = checkCameraAvailability(cam, '2026-11-01', '2026-11-09', [existingReservation]);
+      expect(precedingCheck.isAvailable).toBe(true);
     });
 
     it('rejects invalid date range where start date > end date', () => {

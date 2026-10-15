@@ -4,23 +4,18 @@ import React, { useState, useMemo } from 'react';
 import { useSystem } from '../../context/SystemContext';
 import { useAuth } from '../../context/AuthContext';
 import { BUTUAN_BARANGAYS, FIXED_CITY, FIXED_PROVINCE } from '../../data/seedData';
-import { formatDateTime, formatDate } from '../../lib/utils';
+import { formatDate } from '../../lib/utils';
 import {
   User,
   Bell,
   MapPin,
   ShieldCheck,
-  CheckCircle2,
   Save,
   LogOut,
-  Clock,
-  AlertCircle,
-  Camera,
-  Coins,
-  Package,
   ArrowRight,
   Filter
 } from 'lucide-react';
+import { useFeedback } from '../../context/FeedbackContext';
 
 interface CustomerAccountProps {
   initialSubTab?: 'profile' | 'notifications';
@@ -31,8 +26,8 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
   initialSubTab = 'profile',
   onNavigateTab
 }) => {
-  const { currentUser, updateCurrentUserProfile, reservations, payments } = useSystem();
-  const { profile, signOut } = useAuth();
+  const { currentUser, updateCurrentUserProfile, reservations } = useSystem();
+  const { signOut } = useAuth();
   const [activeSubTab, setActiveSubTab] = useState<'profile' | 'notifications'>(initialSubTab);
 
   // Profile Form State
@@ -43,7 +38,7 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
   const [streetAddress, setStreetAddress] = useState(currentUser.streetAddress || '');
   const [idType, setIdType] = useState(currentUser.idType || 'Philippine National ID');
   const [idNumber, setIdNumber] = useState(currentUser.idNumber || '');
-  const [savedSuccess, setSavedSuccess] = useState(false);
+  const { showSuccess } = useFeedback();
 
   // Notification Filter State
   const [filterCategory, setFilterCategory] = useState<string>('ALL');
@@ -61,8 +56,7 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
       idType,
       idNumber
     });
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 4000);
+    showSuccess('Profile updated successfully! Information synced with IDIO counter verification.', 'Profile Updated');
   };
 
   // Derive live customer notifications
@@ -154,6 +148,38 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
     return allNotifications.filter(n => n.category === filterCategory);
   }, [allNotifications, filterCategory]);
 
+  // Unauthenticated visitors browsing as guest
+  if (!customerId) {
+    return (
+      <div className="text-center py-16 bg-white rounded-xl border border-zinc-200 p-8 space-y-4 max-w-xl mx-auto shadow-xs">
+        <div className="w-12 h-12 rounded-full bg-zinc-100 flex items-center justify-center mx-auto text-zinc-400">
+          <User className="w-6 h-6" />
+        </div>
+        <div className="space-y-1">
+          <h3 className="text-sm font-semibold text-zinc-900">Sign in to your account</h3>
+          <p className="text-xs text-zinc-500 max-w-sm mx-auto">
+            You are currently browsing as a guest. Please sign in or register to manage your Butuan City resident profile, ID verification, and notifications.
+          </p>
+        </div>
+        <div className="flex items-center justify-center gap-3 pt-2">
+          <a
+            href="/login"
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg text-xs font-semibold transition shadow-xs"
+          >
+            <span>Sign In</span>
+            <ArrowRight className="w-4 h-4" />
+          </a>
+          <a
+            href="/register"
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 rounded-lg text-xs font-semibold transition shadow-xs"
+          >
+            <span>Register</span>
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
@@ -196,13 +222,6 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
           </button>
         </div>
       </div>
-
-      {savedSuccess && (
-        <div className="p-3.5 bg-zinc-900 text-white rounded-xl text-xs font-medium flex items-center gap-2 shadow-xs">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>Profile updated successfully! Information synced with IDIO counter verification.</span>
-        </div>
-      )}
 
       {/* SUB-TAB 1: PROFILE & VERIFICATION */}
       {activeSubTab === 'profile' && (

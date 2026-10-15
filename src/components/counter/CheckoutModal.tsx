@@ -26,7 +26,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   onClose,
   onSuccess
 }) => {
-  const { checkoutRental } = useSystem();
+  const { checkoutRental, cameras } = useSystem();
 
   const [condition, setCondition] = useState<CameraCondition>('Excellent');
   const [checklist, setChecklist] = useState({
@@ -41,6 +41,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   if (!reservation) return null;
 
+  const associatedCamera = cameras.find(c => c.id === reservation.cameraId);
+  const isAlreadyCheckedOut =
+    reservation.status === 'CHECKED_OUT' || associatedCamera?.status === 'CHECKED_OUT';
+
   const allChecked =
     checklist.idVerified &&
     checklist.serialMatched &&
@@ -50,6 +54,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const handleCheckoutSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+
+    if (isAlreadyCheckedOut) {
+      onSuccess();
+      onClose();
+      return;
+    }
 
     if (!allChecked) {
       setErrorMessage('Please complete all 4 mandatory physical checkout verification checks.');
@@ -66,6 +76,15 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         onClose();
       } else {
         setErrorMessage(result.message);
+        if (
+          result.message.toLowerCase().includes('already been checked out') ||
+          result.message.toLowerCase().includes('already checked_out')
+        ) {
+          onSuccess();
+          setTimeout(() => {
+            onClose();
+          }, 800);
+        }
       }
     } catch (err: any) {
       setIsProcessing(false);
@@ -87,10 +106,27 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       maxWidth="2xl"
     >
       <form onSubmit={handleCheckoutSubmit} className="space-y-6 text-sm text-zinc-700">
-        {errorMessage && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-            <span>{errorMessage}</span>
+        {(errorMessage || isAlreadyCheckedOut) && (
+          <div className="p-3.5 bg-white border border-zinc-200 rounded-xl text-zinc-800 text-xs flex items-center justify-between gap-2 shadow-xs">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span className="text-zinc-700 font-medium">
+                {errorMessage ||
+                  `Camera ${reservation.cameraName} is already CHECKED_OUT. This reservation belongs in Active Field Rentals.`}
+              </span>
+            </div>
+            {isAlreadyCheckedOut && (
+              <button
+                type="button"
+                onClick={() => {
+                  onSuccess();
+                  onClose();
+                }}
+                className="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg text-[11px] font-semibold shrink-0 cursor-pointer"
+              >
+                Go to Active Rentals
+              </button>
+            )}
           </div>
         )}
 
@@ -224,11 +260,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           </button>
           <button
             type="submit"
-            disabled={!allChecked || isProcessing}
+            disabled={!allChecked || isProcessing || isAlreadyCheckedOut}
             className="px-5 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium shadow-xs transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
             <CheckCircle2 className="w-4 h-4" />
-            <span>{isProcessing ? 'Processing...' : 'Complete Checkout'}</span>
+            <span>{isProcessing ? 'Processing...' : isAlreadyCheckedOut ? 'Already Checked Out' : 'Complete Checkout'}</span>
           </button>
         </div>
       </form>

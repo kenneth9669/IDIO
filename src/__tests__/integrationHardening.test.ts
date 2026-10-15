@@ -165,7 +165,7 @@ describe('IDIO Integration Hardening & End-to-End Rental Lifecycle Suite', () =>
       );
 
       expect(bobResult.success).toBe(false);
-      expect(bobResult.message).toContain('already reserved');
+      expect(bobResult.message).toContain('unavailable for your selected dates');
     });
   });
 

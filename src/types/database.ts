@@ -72,7 +72,8 @@ export interface ReservationRow {
   camera_id: string;
   start_date: string; // YYYY-MM-DD
   end_date: string; // YYYY-MM-DD
-  rental_period?: string; // Generated daterange
+  rental_period?: string; // Generated daterange [start_date, end_date + 1)
+  blocked_period?: string; // Generated daterange [start_date, end_date + 3) with 2-day buffer
   total_days: number;
   daily_rate_snapshot: number;
   subtotal_php: number;
@@ -81,9 +82,24 @@ export interface ReservationRow {
   purpose: string;
   status: ReservationStatus;
   rejection_reason: string | null;
+  agreement_version?: string | null;
   created_at: string;
   updated_at: string;
 }
+
+export interface RentalAgreementAcceptanceRow {
+  id: string; // UUID primary key
+  reservation_id: string; // UUID references reservations(id)
+  customer_id: string; // UUID references profiles(id)
+  agreement_id: string;
+  version: string;
+  agreement_title: string;
+  agreement_text_snapshot: string;
+  agreement_hash: string;
+  accepted_at: string;
+  created_at?: string;
+}
+
 
 export interface RentalRow {
   id: string; // UUID

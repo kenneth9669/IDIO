@@ -32,12 +32,14 @@ export const CustomerRentalsAndPayments: React.FC<{ initialSubTab?: 'rentals' | 
 
   const customerId = currentUser.id;
 
-  // Filter scoped rentals & reservations for active customer
+  // Filter scoped rentals & reservations for active customer (strictly scoped to verified user ID)
   const customerRentals = useMemo(() => {
+    if (!customerId) return [];
     return rentals.filter(r => r.customerId === customerId);
   }, [rentals, customerId]);
 
   const customerReservationsWithRentals = useMemo(() => {
+    if (!customerId) return [];
     return reservations.filter(
       res => res.customerId === customerId && ['CHECKED_OUT', 'RETURNED', 'COMPLETED'].includes(res.status)
     );
@@ -81,6 +83,7 @@ export const CustomerRentalsAndPayments: React.FC<{ initialSubTab?: 'rentals' | 
 
   // Scoped payments list
   const customerPayments = useMemo(() => {
+    if (!customerId) return [];
     const list = payments.filter(p => p.customerId === customerId);
 
     return reservations

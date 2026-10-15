@@ -165,6 +165,16 @@ src/
 - `security_deposit_php` = `camera.security_deposit_php`.
 - `total_amount_php` = `subtotal_php + security_deposit_php`.
 
+### 5. Intentional Scope: Cash on Counter Pickup Only
+- **Decision**: Cash on Counter Pickup (`CASH_PICKUP`) is the **ONLY** supported payment method at this stage. This is an intentional academic scope boundary pending consultation with our instructor on the efficiency and counter feasibility of other payment methods.
+- **Customer UI**: Display strictly Cash on Counter Pickup in customer reservation modals and vouchers. Do not expose GCash, Maya, or bank transfer options in customer workflows.
+- **Server-Side Enforcement**: Validate and enforce `paymentMethod === 'CASH_PICKUP'` for all new bookings; reject GCash, Maya, and bank transfers server-side.
+- **Database Boundary**: Database policy `payments_customer_insert` enforces `payment_method = 'CASH_PICKUP'` on customer inserts.
+- **Ledger Preservation**: Preserve all historical transaction rows (`GCASH`, `MAYA`, `BANK_TRANSFER`, `CASH_PICKUP`) and customer payment records intact.
+- **State Separation**: Maintain financial status (`payment_status`, `deposit_status`) completely separate from reservation status and rental physical status.
+- **Extensibility**: Retain database enum and domain types so additional channels can be evaluated later without database restructuring.
+- **Production Readiness Caution**: Do not claim the system is production-ready solely because Cash Pickup is the only payment option.
+
 ---
 
 ## 8. UI/UX & Design Guidelines

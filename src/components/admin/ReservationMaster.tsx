@@ -5,6 +5,7 @@ import { useSystem } from '../../context/SystemContext';
 import { Reservation } from '../../types';
 import { StatusBadge } from '../common/StatusBadge';
 import { RentalVoucherModal } from '../customer/RentalVoucherModal';
+import { RentalAgreementModal } from '../common/RentalAgreementModal';
 import { ReservationCalendarView } from './ReservationCalendarView';
 import { Dialog } from '../common/Dialog';
 import { formatPHP, formatDate, getCameraImageUrl } from '../../lib/utils';
@@ -14,11 +15,17 @@ import {
   Check,
   X,
   FileText,
+  FileCheck,
   Calendar,
   List,
   Eye,
-  Ban
+  Ban,
+  Clock,
+  Sparkles,
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
+import { useFeedback } from '../../context/FeedbackContext';
 
 export const ReservationMaster: React.FC = () => {
   const {
@@ -35,13 +42,19 @@ export const ReservationMaster: React.FC = () => {
 
   const [selectedVoucher, setSelectedVoucher] = useState<Reservation | null>(null);
   const [viewingReservation, setViewingReservation] = useState<Reservation | null>(null);
+  const [agreementModalReservation, setAgreementModalReservation] = useState<Reservation | null>(null);
   const [rejectPromptId, setRejectPromptId] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState('Conflicting schedule or ID verification issue.');
-  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('Equipment schedule conflict or ID verification requirement.');
+  const { showSuccess, showError } = useFeedback();
+  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [cancellingReservation, setCancellingReservation] = useState<Reservation | null>(null);
 
-  const showFeedback = (msg: string) => {
-    setActionFeedback(msg);
-    setTimeout(() => setActionFeedback(null), 4000);
+  const showFeedback = (message: string, type: 'success' | 'error' = 'success') => {
+    if (type === 'success') {
+      showSuccess(message, 'Reservation Update');
+    } else {
+      showError(message, 'Action Failed');
+    }
   };
 
   const filteredReservations = useMemo(() => {
@@ -61,42 +74,64 @@ export const ReservationMaster: React.FC = () => {
   }, [reservations, searchQuery, statusFilter, paymentFilter]);
 
   const handleApprove = async (id: string, refNo: string) => {
-    const res = await approveReservation(id);
-    if (res.success) {
-      showFeedback(`Approved reservation ${refNo} for customer pickup.`);
-    } else {
-      showFeedback(`Cannot approve ${refNo}: ${res.message}`);
+    if (processingId) return;
+    setProcessingId(id);
+    try {
+      const res = await approveReservation(id);
+      setProcessingId(null);
+      if (res.success) {
+        showFeedback(`Approved reservation ${refNo} for customer pickup.`, 'success');
+      } else {
+        showFeedback(`Cannot approve ${refNo}: ${res.message}`, 'error');
+      }
+    } catch (err: any) {
+      setProcessingId(null);
+      showFeedback(`Error approving ${refNo}: ${err.message}`, 'error');
     }
   };
 
   const handleReject = async (id: string, refNo: string) => {
-    const res = await rejectReservation(id, rejectReason);
-    if (res.success) {
-      showFeedback(`Rejected reservation ${refNo}.`);
-      setRejectPromptId(null);
-    } else {
-      showFeedback(`Failed to reject: ${res.message}`);
+    if (processingId) return;
+    if (!rejectReason.trim()) {
+      showFeedback('Please provide a rejection reason.', 'error');
+      return;
+    }
+    setProcessingId(id);
+    try {
+      const res = await rejectReservation(id, rejectReason.trim());
+      setProcessingId(null);
+      if (res.success) {
+        showFeedback(`Rejected reservation ${refNo}. Saved reason for customer.`, 'success');
+        setRejectPromptId(null);
+      } else {
+        showFeedback(`Failed to reject ${refNo}: ${res.message}`, 'error');
+      }
+    } catch (err: any) {
+      setProcessingId(null);
+      showFeedback(`Error rejecting ${refNo}: ${err.message}`, 'error');
     }
   };
 
-  const handleCancel = async (id: string, refNo: string) => {
-    const res = await cancelReservation(id);
-    if (res.success) {
-      showFeedback(`Cancelled reservation ${refNo}.`);
-    } else {
-      showFeedback(`Failed to cancel: ${res.message}`);
+  const handleConfirmCancel = async () => {
+    if (!cancellingReservation || processingId) return;
+    setProcessingId(cancellingReservation.id);
+    try {
+      const res = await cancelReservation(cancellingReservation.id);
+      setProcessingId(null);
+      if (res.success) {
+        showFeedback(`Cancelled reservation ${cancellingReservation.referenceNo}.`, 'success');
+        setCancellingReservation(null);
+      } else {
+        showFeedback(`Failed to cancel ${cancellingReservation.referenceNo}: ${res.message}`, 'error');
+      }
+    } catch (err: any) {
+      setProcessingId(null);
+      showFeedback(`Error cancelling: ${err.message}`, 'error');
     }
   };
 
   return (
     <div className="space-y-6">
-      {/* Feedback Banner */}
-      {actionFeedback && (
-        <div className="p-3.5 bg-zinc-900 text-white rounded-xl text-xs font-medium flex items-center justify-between shadow-xs">
-          <span>{actionFeedback}</span>
-          <button onClick={() => setActionFeedback(null)} className="text-zinc-400 hover:text-white cursor-pointer">✕</button>
-        </div>
-      )}
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-200">
@@ -259,15 +294,26 @@ export const ReservationMaster: React.FC = () => {
                             {res.status === 'PENDING_APPROVAL' && (
                               <>
                                 <button
+                                  type="button"
                                   onClick={() => handleApprove(res.id, res.referenceNo)}
-                                  className="p-1.5 rounded-md hover:bg-emerald-50 text-zinc-400 hover:text-emerald-700 transition cursor-pointer"
+                                  disabled={processingId === res.id}
+                                  className="p-1.5 rounded-md hover:bg-emerald-50 text-zinc-400 hover:text-emerald-700 transition cursor-pointer disabled:opacity-50"
                                   title="Approve Reservation"
                                 >
-                                  <Check className="w-4 h-4" />
+                                  {processingId === res.id ? (
+                                    <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                                  ) : (
+                                    <Check className="w-4 h-4" />
+                                  )}
                                 </button>
                                 <button
-                                  onClick={() => setRejectPromptId(res.id)}
-                                  className="p-1.5 rounded-md hover:bg-rose-50 text-zinc-400 hover:text-rose-600 transition cursor-pointer"
+                                  type="button"
+                                  onClick={() => {
+                                    setRejectPromptId(res.id);
+                                    setRejectReason('Equipment schedule conflict or ID verification requirement.');
+                                  }}
+                                  disabled={processingId === res.id}
+                                  className="p-1.5 rounded-md hover:bg-rose-50 text-zinc-400 hover:text-rose-600 transition cursor-pointer disabled:opacity-50"
                                   title="Reject Reservation"
                                 >
                                   <X className="w-4 h-4" />
@@ -278,8 +324,10 @@ export const ReservationMaster: React.FC = () => {
                             {/* Cancel Allowed for Approved */}
                             {res.status === 'APPROVED' && (
                               <button
-                                onClick={() => handleCancel(res.id, res.referenceNo)}
-                                className="p-1.5 rounded-md hover:bg-rose-50 text-zinc-400 hover:text-rose-600 transition cursor-pointer"
+                                type="button"
+                                onClick={() => setCancellingReservation(res)}
+                                disabled={processingId === res.id}
+                                className="p-1.5 rounded-md hover:bg-rose-50 text-zinc-400 hover:text-rose-600 transition cursor-pointer disabled:opacity-50"
                                 title="Cancel Reservation"
                               >
                                 <Ban className="w-3.5 h-3.5" />
@@ -302,6 +350,15 @@ export const ReservationMaster: React.FC = () => {
                               title="View Rental Voucher"
                             >
                               <FileText className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* Accepted Agreement */}
+                            <button
+                              onClick={() => setAgreementModalReservation(res)}
+                              className="p-1.5 rounded-md hover:bg-emerald-50 text-zinc-500 hover:text-emerald-700 transition cursor-pointer"
+                              title="View Customer Rental Agreement"
+                            >
+                              <FileCheck className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </td>
@@ -376,7 +433,7 @@ export const ReservationMaster: React.FC = () => {
               </div>
               <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-zinc-200">
                 <div>
-                  <span className="text-zinc-400">Dates:</span>{' '}
+                  <span className="text-zinc-400">Contractual Dates:</span>{' '}
                   <strong className="text-zinc-900">
                     {formatDate(viewingReservation.startDate)} to {formatDate(viewingReservation.endDate)}
                   </strong>
@@ -387,12 +444,37 @@ export const ReservationMaster: React.FC = () => {
                 </div>
               </div>
 
+              <div className="pt-1.5 border-t border-zinc-200/70 text-[11px] flex items-center justify-between">
+                <span className="text-zinc-500 font-medium">Return Schedule:</span>
+                <span className="text-zinc-800 font-medium">By 6:00 PM on {formatDate(viewingReservation.endDate)}</span>
+              </div>
+
               {viewingReservation.purpose && (
                 <div className="pt-2 border-t border-zinc-200 text-[11px]">
                   <span className="text-zinc-400">Shooting Purpose: </span>
                   <span className="text-zinc-800 italic">&quot;{viewingReservation.purpose}&quot;</span>
                 </div>
               )}
+            </div>
+
+            {/* Agreement Audit Section */}
+            <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block">
+                  Accepted Rental Agreement
+                </span>
+                <p className="text-xs font-semibold text-zinc-900 flex items-center gap-1.5 mt-0.5">
+                  <FileCheck className="w-3.5 h-3.5 text-emerald-600" />
+                  Version {viewingReservation.agreementVersion || 'v1.0'} (Legally Binding Snapshot)
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAgreementModalReservation(viewingReservation)}
+                className="px-3 py-1.5 rounded-md bg-white border border-zinc-200 text-xs font-semibold text-zinc-800 hover:bg-zinc-50 shadow-2xs transition cursor-pointer"
+              >
+                Inspect Agreement
+              </button>
             </div>
 
             {/* Financial Ledger Calculation */}
@@ -464,6 +546,13 @@ export const ReservationMaster: React.FC = () => {
         onClose={() => setSelectedVoucher(null)}
       />
 
+      {/* Agreement Modal */}
+      <RentalAgreementModal
+        reservation={agreementModalReservation}
+        isOpen={!!agreementModalReservation}
+        onClose={() => setAgreementModalReservation(null)}
+      />
+
       {/* Reject Modal */}
       {rejectPromptId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
@@ -485,20 +574,78 @@ export const ReservationMaster: React.FC = () => {
             </div>
             <div className="flex justify-end gap-2.5 pt-2">
               <button
+                type="button"
+                disabled={processingId === rejectPromptId}
                 onClick={() => setRejectPromptId(null)}
-                className="px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-medium cursor-pointer"
+                className="px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-medium cursor-pointer disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
+                type="button"
+                disabled={processingId === rejectPromptId}
                 onClick={() => handleReject(rejectPromptId, 'Reservation')}
-                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium cursor-pointer"
+                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
               >
-                Confirm Reject
+                {processingId === rejectPromptId ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Rejecting...</span>
+                  </>
+                ) : (
+                  <span>Confirm Reject</span>
+                )}
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Cancellation Confirmation Dialog */}
+      {cancellingReservation && (
+        <Dialog
+          isOpen={!!cancellingReservation}
+          onClose={() => !processingId && setCancellingReservation(null)}
+          title="Cancel Approved Reservation"
+          description={`Revoke approved reservation ${cancellingReservation.referenceNo} for ${cancellingReservation.customerName}?`}
+          maxWidth="md"
+        >
+          <div className="space-y-4 text-xs text-zinc-700">
+            <p>
+              Are you sure you want to cancel this approved reservation for <strong>{cancellingReservation.cameraName}</strong>?
+            </p>
+            <p className="text-zinc-500">
+              Contractual Dates: {formatDate(cancellingReservation.startDate)} to {formatDate(cancellingReservation.endDate)}.
+              The dates will be immediately freed up for other customer bookings.
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-zinc-100">
+              <button
+                type="button"
+                disabled={!!processingId}
+                onClick={() => setCancellingReservation(null)}
+                className="px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-medium cursor-pointer disabled:opacity-50"
+              >
+                Keep Approved
+              </button>
+              <button
+                type="button"
+                disabled={!!processingId}
+                onClick={handleConfirmCancel}
+                className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {processingId === cancellingReservation.id ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Cancelling...</span>
+                  </>
+                ) : (
+                  <span>Confirm Cancellation</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </Dialog>
       )}
     </div>
   );

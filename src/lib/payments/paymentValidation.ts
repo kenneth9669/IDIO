@@ -23,9 +23,37 @@ export interface ValidationResult {
   errors: string[];
 }
 
-const VALID_PAYMENT_METHODS: PaymentMethod[] = ['GCASH', 'CASH_PICKUP', 'MAYA', 'BANK_TRANSFER'];
-const VALID_PAYMENT_STATUSES: PaymentStatus[] = ['PENDING', 'PAID', 'REFUNDED'];
-const VALID_DEPOSIT_STATUSES: DepositStatus[] = ['HELD', 'REFUNDED', 'DEDUCTED', 'FORFEITED'];
+export const VALID_PAYMENT_METHODS: PaymentMethod[] = ['CASH_PICKUP', 'GCASH', 'MAYA', 'BANK_TRANSFER'];
+export const ALLOWED_NEW_PAYMENT_METHODS: PaymentMethod[] = ['CASH_PICKUP'];
+export const VALID_PAYMENT_STATUSES: PaymentStatus[] = ['PENDING', 'PAID', 'REFUNDED'];
+export const VALID_DEPOSIT_STATUSES: DepositStatus[] = ['HELD', 'REFUNDED', 'DEDUCTED', 'FORFEITED'];
+
+/**
+ * Validates whether a payment method is acceptable for new transactions.
+ * At this stage, only Cash on Counter Pickup ('CASH_PICKUP') is accepted.
+ */
+export function validatePaymentMethodForNewTransaction(method?: PaymentMethod): ValidationResult {
+  if (!method) {
+    return {
+      isValid: false,
+      errors: ['Payment method is required.']
+    };
+  }
+
+  if (!ALLOWED_NEW_PAYMENT_METHODS.includes(method)) {
+    return {
+      isValid: false,
+      errors: [
+        `Unsupported payment method '${method}'. At this stage, only Cash on Counter Pickup ('CASH_PICKUP') is accepted for new transactions.`
+      ]
+    };
+  }
+
+  return {
+    isValid: true,
+    errors: []
+  };
+}
 
 /**
  * Validates manual payment reference formatting.

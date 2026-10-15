@@ -13,8 +13,11 @@ import {
   AlertTriangle,
   TrendingUp,
   ShieldCheck,
-  Coins
+  Coins,
+  Sparkles,
+  Loader2
 } from 'lucide-react';
+import { useFeedback } from '../../context/FeedbackContext';
 
 export const PaymentsManager: React.FC = () => {
   const {
@@ -22,8 +25,7 @@ export const PaymentsManager: React.FC = () => {
     reservations,
     confirmPayment,
     refundPayment,
-    settleDeposit,
-    updatePaymentStatus
+    settleDeposit
   } = useSystem();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -44,11 +46,15 @@ export const PaymentsManager: React.FC = () => {
   const [deductionAmount, setDeductionAmount] = useState(0);
   const [deductionReason, setDeductionReason] = useState('');
 
-  const [actionAlert, setActionAlert] = useState<string | null>(null);
+  const { showSuccess, showError } = useFeedback();
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  const showAlert = (msg: string) => {
-    setActionAlert(msg);
-    setTimeout(() => setActionAlert(null), 4000);
+  const showAlert = (message: string, type: 'success' | 'error' = 'success') => {
+    if (type === 'success') {
+      showSuccess(message);
+    } else {
+      showError(message);
+    }
   };
 
   // Compile unified transactions list combining payments table records and reservations
@@ -118,62 +124,85 @@ export const PaymentsManager: React.FC = () => {
 
   // Handlers
   const handleConfirmPayment = async () => {
-    if (!confirmingPayment) return;
-    const res = await confirmPayment(
-      confirmingPayment.id,
-      confirmMethod,
-      confirmReference || 'MANUAL-COUNTER-PAID'
-    );
-    if (res.success) {
-      showAlert(`Confirmed payment for ${confirmingPayment.referenceNo || 'Reservation'}`);
-      setConfirmingPayment(null);
-    } else {
-      // Fallback local update if offline/mock
-      updatePaymentStatus(confirmingPayment.reservationId, 'PAID', confirmReference);
-      showAlert(`Updated payment status to PAID`);
-      setConfirmingPayment(null);
+    if (!confirmingPayment || isProcessing) return;
+    setIsProcessing(true);
+    try {
+      const res = await confirmPayment(
+        confirmingPayment.id,
+        confirmMethod,
+        confirmReference || 'MANUAL-COUNTER-PAID'
+      );
+      setIsProcessing(false);
+      if (res.success) {
+        showAlert(`Confirmed payment for ${confirmingPayment.referenceNo || 'Reservation'}`, 'success');
+        setConfirmingPayment(null);
+      } else {
+        showAlert(res.message || 'Failed to confirm payment on authoritative server.', 'error');
+      }
+    } catch (err: any) {
+      setIsProcessing(false);
+      showAlert(err.message || 'Server error confirming payment.', 'error');
     }
   };
 
   const handleRefundPayment = async () => {
-    if (!refundingPayment) return;
-    const res = await refundPayment(refundingPayment.id, refundReason);
-    if (res.success) {
-      showAlert(`Refund recorded for ${refundingPayment.referenceNo || 'Reservation'}`);
-      setRefundingPayment(null);
-    } else {
-      updatePaymentStatus(refundingPayment.reservationId, 'REFUNDED');
-      showAlert(`Payment marked as REFUNDED`);
-      setRefundingPayment(null);
+    if (!refundingPayment || isProcessing) return;
+    setIsProcessing(true);
+    try {
+      const res = await refundPayment(refundingPayment.id, refundReason);
+      setIsProcessing(false);
+      if (res.success) {
+        showAlert(`Refund recorded for ${refundingPayment.referenceNo || 'Reservation'}`, 'success');
+        setRefundingPayment(null);
+      } else {
+        showAlert(res.message || 'Failed to record refund on authoritative server.', 'error');
+      }
+    } catch (err: any) {
+      setIsProcessing(false);
+      showAlert(err.message || 'Server error recording refund.', 'error');
     }
   };
 
   const handleSettleDeposit = async () => {
-    if (!settlingDepositPayment) return;
-    const res = await settleDeposit(
-      settlingDepositPayment.id,
-      settleAction,
-      settleAction === 'DEDUCT_DAMAGE' ? deductionAmount : undefined,
-      deductionReason
-    );
-    if (res.success) {
-      showAlert(`Security deposit settled as ${settleAction}`);
-      setSettlingDepositPayment(null);
-    } else {
-      showAlert(`Deposit settled.`);
-      setSettlingDepositPayment(null);
+    if (!settlingDepositPayment || isProcessing) return;
+    if (settleAction === 'DEDUCT_DAMAGE') {
+      if (deductionAmount <= 0) {
+        showAlert('Please provide a valid deduction amount.', 'error');
+        return;
+      }
+      if (deductionAmount > settlingDepositPayment.securityDeposit) {
+        showAlert(`Deduction amount cannot exceed security deposit of ₱${settlingDepositPayment.securityDeposit}.`, 'error');
+        return;
+      }
+      if (!deductionReason.trim()) {
+        showAlert('Please provide a justification reason for damage deduction.', 'error');
+        return;
+      }
+    }
+
+    setIsProcessing(true);
+    try {
+      const res = await settleDeposit(
+        settlingDepositPayment.id,
+        settleAction,
+        settleAction === 'DEDUCT_DAMAGE' ? deductionAmount : undefined,
+        deductionReason
+      );
+      setIsProcessing(false);
+      if (res.success) {
+        showAlert(`Security deposit settled as ${settleAction}`, 'success');
+        setSettlingDepositPayment(null);
+      } else {
+        showAlert(res.message || 'Failed to settle security deposit on authoritative server.', 'error');
+      }
+    } catch (err: any) {
+      setIsProcessing(false);
+      showAlert(err.message || 'Server error settling deposit.', 'error');
     }
   };
 
   return (
     <div className="space-y-6">
-      {/* Alert Banner */}
-      {actionAlert && (
-        <div className="p-3.5 bg-zinc-900 text-white rounded-xl text-xs font-medium flex items-center justify-between shadow-xs">
-          <span>{actionAlert}</span>
-          <button onClick={() => setActionAlert(null)} className="text-zinc-400 hover:text-white cursor-pointer">✕</button>
-        </div>
-      )}
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-200">
@@ -270,10 +299,10 @@ export const PaymentsManager: React.FC = () => {
             className="bg-white border border-zinc-200 rounded-lg px-2.5 py-1.5 text-xs text-zinc-700 focus:outline-none focus:border-zinc-900"
           >
             <option value="ALL">All Methods</option>
-            <option value="GCASH">GCash</option>
-            <option value="CASH_PICKUP">Cash on Pickup</option>
-            <option value="MAYA">Maya</option>
-            <option value="BANK_TRANSFER">Bank Transfer</option>
+            <option value="CASH_PICKUP">Cash on Counter Pickup (Active)</option>
+            <option value="GCASH">GCash (Historical)</option>
+            <option value="MAYA">Maya (Historical)</option>
+            <option value="BANK_TRANSFER">Bank Transfer (Historical)</option>
           </select>
         </div>
       </div>
@@ -358,7 +387,7 @@ export const PaymentsManager: React.FC = () => {
                           <button
                             onClick={() => {
                               setConfirmingPayment(t);
-                              setConfirmMethod(t.paymentMethod || 'GCASH');
+                              setConfirmMethod('CASH_PICKUP');
                               setConfirmReference(t.paymentReference || '');
                             }}
                             className="px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-white font-medium text-[11px] transition cursor-pointer"
@@ -428,13 +457,14 @@ export const PaymentsManager: React.FC = () => {
               <select
                 value={confirmMethod}
                 onChange={e => setConfirmMethod(e.target.value as PaymentMethod)}
-                className="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-zinc-900 text-xs focus:outline-none focus:border-zinc-900"
+                disabled
+                className="w-full bg-zinc-100 border border-zinc-300 rounded-lg px-3 py-2 text-zinc-700 text-xs focus:outline-none cursor-not-allowed"
               >
-                <option value="CASH_PICKUP">Cash on Counter Pickup (Official Method)</option>
-                <option value="GCASH">GCash (Historical / Alternative)</option>
-                <option value="MAYA">Maya (Historical / Alternative)</option>
-                <option value="BANK_TRANSFER">Bank Transfer (Historical / Alternative)</option>
+                <option value="CASH_PICKUP">Cash on Counter Pickup (Active Settlement Method)</option>
               </select>
+              <p className="text-[11px] text-zinc-500 mt-1">
+                At this stage, Cash on Counter Pickup is the only accepted payment method for transactions. Historical methods are disabled.
+              </p>
             </div>
 
             <div>
@@ -450,16 +480,27 @@ export const PaymentsManager: React.FC = () => {
 
             <div className="flex justify-end gap-2 pt-2 border-t border-zinc-100">
               <button
+                type="button"
+                disabled={isProcessing}
                 onClick={() => setConfirmingPayment(null)}
-                className="px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-semibold"
+                className="px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-semibold cursor-pointer disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
+                type="button"
+                disabled={isProcessing}
                 onClick={handleConfirmPayment}
-                className="px-4 py-1.5 rounded-lg bg-zinc-900 text-white hover:bg-zinc-800 text-xs font-bold"
+                className="px-4 py-1.5 rounded-lg bg-zinc-900 text-white hover:bg-zinc-800 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
-                Confirm Payment
+                {isProcessing ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Confirming...</span>
+                  </>
+                ) : (
+                  <span>Confirm Payment</span>
+                )}
               </button>
             </div>
           </div>
@@ -470,7 +511,7 @@ export const PaymentsManager: React.FC = () => {
       {refundingPayment && (
         <Dialog
           isOpen={!!refundingPayment}
-          onClose={() => setRefundingPayment(null)}
+          onClose={() => !isProcessing && setRefundingPayment(null)}
           title="Record Payment Refund"
           description={`Record simulated refund of ₱${refundingPayment.rentalAmount} for ${refundingPayment.referenceNo}.`}
         >
@@ -487,16 +528,27 @@ export const PaymentsManager: React.FC = () => {
 
             <div className="flex justify-end gap-2 pt-2 border-t border-zinc-100">
               <button
+                type="button"
+                disabled={isProcessing}
                 onClick={() => setRefundingPayment(null)}
-                className="px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-semibold"
+                className="px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-semibold cursor-pointer disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
+                type="button"
+                disabled={isProcessing}
                 onClick={handleRefundPayment}
-                className="px-4 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 text-xs font-bold"
+                className="px-4 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
-                Confirm Refund
+                {isProcessing ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Refunding...</span>
+                  </>
+                ) : (
+                  <span>Confirm Refund</span>
+                )}
               </button>
             </div>
           </div>
@@ -507,7 +559,7 @@ export const PaymentsManager: React.FC = () => {
       {settlingDepositPayment && (
         <Dialog
           isOpen={!!settlingDepositPayment}
-          onClose={() => setSettlingDepositPayment(null)}
+          onClose={() => !isProcessing && setSettlingDepositPayment(null)}
           title="Settle Security Deposit"
           description={`Held Security Deposit: ₱${settlingDepositPayment.securityDeposit} for ${settlingDepositPayment.referenceNo}.`}
         >
@@ -555,16 +607,27 @@ export const PaymentsManager: React.FC = () => {
 
             <div className="flex justify-end gap-2 pt-2 border-t border-zinc-100">
               <button
+                type="button"
+                disabled={isProcessing}
                 onClick={() => setSettlingDepositPayment(null)}
-                className="px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-semibold"
+                className="px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-semibold cursor-pointer disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
+                type="button"
+                disabled={isProcessing}
                 onClick={handleSettleDeposit}
-                className="px-4 py-1.5 rounded-lg bg-zinc-900 text-white hover:bg-zinc-800 text-xs font-bold"
+                className="px-4 py-1.5 rounded-lg bg-zinc-900 text-white hover:bg-zinc-800 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
-                Settle Deposit
+                {isProcessing ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Settling...</span>
+                  </>
+                ) : (
+                  <span>Settle Deposit</span>
+                )}
               </button>
             </div>
           </div>

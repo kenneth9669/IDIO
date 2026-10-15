@@ -1,6 +1,8 @@
 import { PaymentMethod, ReservationStatus } from '../../types/database';
+import { CURRENT_AGREEMENT_VERSION } from '../../data/rentalAgreement';
 
-export const VALID_PAYMENT_METHODS: PaymentMethod[] = ['GCASH', 'CASH_PICKUP', 'MAYA', 'BANK_TRANSFER'];
+export const VALID_PAYMENT_METHODS: PaymentMethod[] = ['CASH_PICKUP', 'GCASH', 'MAYA', 'BANK_TRANSFER'];
+export const ALLOWED_NEW_PAYMENT_METHODS: PaymentMethod[] = ['CASH_PICKUP'];
 export const VALID_RESERVATION_STATUSES: ReservationStatus[] = ['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'CANCELLED'];
 
 export interface CreateReservationInput {
@@ -10,12 +12,15 @@ export interface CreateReservationInput {
   purpose: string;
   paymentMethod: PaymentMethod;
   paymentReference?: string;
+  agreementAccepted: boolean;
+  agreementVersion: string;
 }
 
 export interface ValidationResult {
   isValid: boolean;
   errors: string[];
 }
+
 
 /**
  * Validates reservation creation parameters on the server side.
@@ -73,9 +78,24 @@ export function validateReservationInput(input: Partial<CreateReservationInput>)
     errors.push('Rental purpose cannot exceed 500 characters.');
   }
 
-  // Payment Method
-  if (!input.paymentMethod || !VALID_PAYMENT_METHODS.includes(input.paymentMethod)) {
-    errors.push(`Invalid payment method '${input.paymentMethod}'. Allowed: ${VALID_PAYMENT_METHODS.join(', ')}.`);
+  // Payment Method: Strictly Cash on Counter Pickup for new reservations at this stage
+  if (!input.paymentMethod) {
+    errors.push('Payment method is required.');
+  } else if (!ALLOWED_NEW_PAYMENT_METHODS.includes(input.paymentMethod)) {
+    errors.push(
+      `Unsupported payment method '${input.paymentMethod}'. At this stage, only Cash on Counter Pickup ('CASH_PICKUP') is accepted for new reservations.`
+    );
+  }
+
+  // Customer Rental Agreement Acceptance
+  if (input.agreementAccepted !== true) {
+    errors.push('Customer Rental Agreement must be explicitly reviewed and accepted before submitting a reservation.');
+  }
+
+  if (!input.agreementVersion || input.agreementVersion !== CURRENT_AGREEMENT_VERSION) {
+    errors.push(
+      `Invalid or outdated agreement version '${input.agreementVersion || 'unspecified'}'. You must review and accept the current agreement version (${CURRENT_AGREEMENT_VERSION}).`
+    );
   }
 
   return {

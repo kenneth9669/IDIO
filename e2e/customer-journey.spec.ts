@@ -45,7 +45,7 @@ test.describe('IDIO Customer Journey E2E', () => {
     }
 
     // 4. Reserve an available camera
-    const availableReserveBtn = page.locator('button[aria-label*="Reserve"]:not([disabled]), button:not([disabled]):has-text("Reserve")').first();
+    const availableReserveBtn = page.locator('button:enabled:has-text("Reserve")').first();
     await expect(availableReserveBtn).toBeVisible({ timeout: 10000 });
     await availableReserveBtn.click();
 

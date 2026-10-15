@@ -111,9 +111,9 @@ export const ReturnInspectionModal: React.FC<ReturnInspectionModalProps> = ({
     >
       <form onSubmit={handleSubmit} className="space-y-6 text-sm text-zinc-700">
         {errorMessage && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-xs flex items-center gap-2">
+          <div className="p-3.5 bg-white border border-zinc-200 rounded-xl text-zinc-800 text-xs flex items-center gap-2.5 shadow-xs">
             <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-            <span>{errorMessage}</span>
+            <span className="text-zinc-700 font-medium">{errorMessage}</span>
           </div>
         )}
 

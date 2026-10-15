@@ -48,6 +48,40 @@ export function calculateRentalDays(startDate: string, endDate: string): number 
   return diffDays > 0 ? diffDays : 1;
 }
 
+/**
+ * Adds an integer number of calendar days to a YYYY-MM-DD date string.
+ * Uses Date.UTC to guarantee timezone-independent date arithmetic.
+ */
+export function addDays(dateStr: string, days: number): string {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d + days));
+  return date.toISOString().split('T')[0];
+}
+
+/**
+ * Subtracts an integer number of calendar days from a YYYY-MM-DD date string.
+ */
+export function subtractDays(dateStr: string, days: number): string {
+  return addDays(dateStr, -days);
+}
+
+/**
+ * Calculates the buffer end date (2 calendar days after the agreed return date).
+ * Example: agreed return Oct 22 -> buffer ends Oct 24.
+ */
+export function getBufferEndDate(endDate: string): string {
+  return addDays(endDate, 2);
+}
+
+/**
+ * Checks if a test date falls inclusively between start and end (YYYY-MM-DD).
+ */
+export function isDateWithinRange(testDate: string, startDate: string, endDate: string): boolean {
+  return testDate >= startDate && testDate <= endDate;
+}
+
+
 export function generateReferenceCode(prefix = 'IDIO'): string {
   const randomNum = Math.floor(100000 + Math.random() * 900000);
   return `${prefix}-${randomNum}`;

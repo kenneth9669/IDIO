@@ -26,13 +26,15 @@ export const CustomerRentals: React.FC = () => {
 
   const customerId = currentUser.id;
 
-  // Filter scoped rentals & reservations for active customer
+  // Filter scoped rentals & reservations for active customer (strictly scoped to verified user ID)
   const customerRentals = useMemo(() => {
+    if (!customerId) return [];
     return rentals.filter((r) => r.customerId === customerId);
   }, [rentals, customerId]);
 
   // Also include reservations that are CHECKED_OUT or COMPLETED to ensure comprehensive visibility
   const customerReservationsWithRentals = useMemo(() => {
+    if (!customerId) return [];
     return reservations.filter(
       (res) => res.customerId === customerId && ['CHECKED_OUT', 'RETURNED', 'COMPLETED'].includes(res.status)
     );

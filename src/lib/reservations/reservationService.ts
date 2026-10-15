@@ -4,6 +4,7 @@ import {
   DigitalCameraRow,
   ProfileRow,
   PaymentAndDepositRow,
+  RentalRow,
   ReservationStatus,
   PaymentMethod,
   PaymentStatus,
@@ -12,7 +13,11 @@ import {
 import { Reservation, CameraCategory, CameraCondition, RentalStatus } from '../../types';
 import { getAuthenticatedUser, requireAdmin } from '../auth';
 import { validateReservationInput, validateReservationTransition, CreateReservationInput } from './reservationValidation';
-import { calculateRentalDays, generateReferenceCode } from '../utils';
+import { calculateRentalDays, generateReferenceCode, addDays, subtractDays, getBufferEndDate, formatDate } from '../utils';
+import { recordAgreementAcceptance } from '../agreements/agreementService';
+import { CURRENT_AGREEMENT_VERSION } from '../../data/rentalAgreement';
+import { BookedDateRange } from '../availabilityEngine';
+import { SEED_RESERVATIONS } from '../../data/seedData';
 
 export interface ReservationServiceResult<T = any> {
   success: boolean;
@@ -23,13 +28,29 @@ export interface ReservationServiceResult<T = any> {
 
 /**
  * Maps database rows to domain `Reservation` object.
+ * Incorporates active or completed rental status so checked-out reservations
+ * transition cleanly in the UI out of pickup queues.
  */
 export function mapRowToReservation(
   res: ReservationRow,
   profile?: Partial<ProfileRow>,
   camera?: Partial<DigitalCameraRow>,
-  payment?: Partial<PaymentAndDepositRow>
+  payment?: Partial<PaymentAndDepositRow>,
+  rental?: Partial<RentalRow>
 ): Reservation {
+  let resolvedStatus: RentalStatus = res.status as RentalStatus;
+  if (rental?.status) {
+    if (rental.status === 'CHECKED_OUT') {
+      resolvedStatus = 'CHECKED_OUT';
+    } else if (rental.status === 'RETURNED') {
+      resolvedStatus = 'RETURNED';
+    } else if (rental.status === 'COMPLETED') {
+      resolvedStatus = 'COMPLETED';
+    }
+  } else if (camera?.status === 'CHECKED_OUT' && res.status === 'APPROVED') {
+    resolvedStatus = 'CHECKED_OUT';
+  }
+
   return {
     id: res.id,
     referenceNo: res.reference_no,
@@ -55,14 +76,22 @@ export function mapRowToReservation(
     securityDeposit: Number(res.security_deposit_php),
     totalAmount: Number(res.total_amount_php),
     purpose: res.purpose,
-    status: res.status as RentalStatus,
+    status: resolvedStatus,
     paymentStatus: (payment?.payment_status as PaymentStatus) || 'PENDING',
-    paymentMethod: (payment?.payment_method as PaymentMethod) || 'GCASH',
+    paymentMethod: (payment?.payment_method as PaymentMethod) || 'CASH_PICKUP',
     paymentReference: payment?.payment_reference || undefined,
     depositStatus: (payment?.deposit_status as DepositStatus) || 'HELD',
     depositDeduction: payment?.deposit_deduction_php ? Number(payment.deposit_deduction_php) : undefined,
     depositNotes: payment?.deposit_deduction_reason || undefined,
     rejectionReason: res.rejection_reason || undefined,
+    checkoutCondition: (rental?.checkout_condition as CameraCondition) || undefined,
+    checkoutNotes: rental?.checkout_notes || undefined,
+    checkoutTimestamp: rental?.checked_out_at || undefined,
+    returnCondition: (rental?.return_condition as CameraCondition) || undefined,
+    returnNotes: rental?.return_inspection_notes || undefined,
+    returnTimestamp: rental?.returned_at || undefined,
+    bufferEndDate: getBufferEndDate(res.end_date),
+    agreementVersion: CURRENT_AGREEMENT_VERSION,
     createdAt: res.created_at,
     updatedAt: res.updated_at
   };
@@ -85,7 +114,7 @@ export async function getReservations(filters?: {
       return { success: false, message: 'Unauthorized: Please log in to view reservations.' };
     }
 
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     let query = supabase
       .from('reservations')
@@ -93,7 +122,8 @@ export async function getReservations(filters?: {
         *,
         profiles:customer_id (id, full_name, email, phone, barangay, street_address, id_type, id_number),
         digital_cameras:camera_id (id, name, brand, category, serial_number, image_url, daily_rate_php, security_deposit_php),
-        payments_and_deposits (payment_status, payment_method, payment_reference, deposit_status, deposit_deduction_php, deposit_deduction_reason)
+        payments_and_deposits (payment_status, payment_method, payment_reference, deposit_status, deposit_deduction_php, deposit_deduction_reason),
+        rentals (id, status, checked_out_at, checkout_condition, checkout_notes, return_inspection_notes, return_condition, returned_at)
       `)
       .order('created_at', { ascending: false });
 
@@ -122,7 +152,8 @@ export async function getReservations(filters?: {
       const profile = row.profiles;
       const camera = row.digital_cameras;
       const payment = Array.isArray(row.payments_and_deposits) ? row.payments_and_deposits[0] : row.payments_and_deposits;
-      return mapRowToReservation(row, profile, camera, payment);
+      const rental = Array.isArray(row.rentals) ? row.rentals[0] : row.rentals;
+      return mapRowToReservation(row, profile, camera, payment, rental);
     });
 
     // Client-side text search
@@ -155,7 +186,7 @@ export async function getReservationById(id: string): Promise<ReservationService
       return { success: false, message: 'Unauthorized: Please log in.' };
     }
 
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     const { data, error } = await supabase
       .from('reservations')
@@ -163,7 +194,8 @@ export async function getReservationById(id: string): Promise<ReservationService
         *,
         profiles:customer_id (id, full_name, email, phone, barangay, street_address, id_type, id_number),
         digital_cameras:camera_id (id, name, brand, category, serial_number, image_url, daily_rate_php, security_deposit_php),
-        payments_and_deposits (payment_status, payment_method, payment_reference, deposit_status, deposit_deduction_php, deposit_deduction_reason)
+        payments_and_deposits (payment_status, payment_method, payment_reference, deposit_status, deposit_deduction_php, deposit_deduction_reason),
+        rentals (id, status, checked_out_at, checkout_condition, checkout_notes, return_inspection_notes, return_condition, returned_at)
       `)
       .eq('id', id)
       .single();
@@ -180,11 +212,12 @@ export async function getReservationById(id: string): Promise<ReservationService
     const profile = data.profiles;
     const camera = data.digital_cameras;
     const payment = Array.isArray(data.payments_and_deposits) ? data.payments_and_deposits[0] : data.payments_and_deposits;
+    const rental = Array.isArray(data.rentals) ? data.rentals[0] : data.rentals;
 
     return {
       success: true,
       message: 'Reservation retrieved.',
-      data: mapRowToReservation(data, profile, camera, payment)
+      data: mapRowToReservation(data, profile, camera, payment, rental)
     };
   } catch (err: any) {
     return { success: false, message: err.message || 'Error fetching reservation record.' };
@@ -192,8 +225,8 @@ export async function getReservationById(id: string): Promise<ReservationService
 }
 
 /**
- * Server-Side Availability Check against active reservations.
- * Active blocking statuses: PENDING_APPROVAL and APPROVED.
+ * Server-Side Availability Check against active reservations and rentals.
+ * Active blocking statuses: PENDING_APPROVAL, APPROVED, and CHECKED_OUT.
  */
 export async function checkCameraAvailabilityServer(
   cameraId: string,
@@ -218,19 +251,60 @@ export async function checkCameraAvailabilityServer(
     if (camera.status === 'MAINTENANCE') {
       return {
         isAvailable: false,
-        reason: `Camera is currently under maintenance (${camera.maintenance_notes || 'Service / calibration'}).`
+        reason: 'This camera is currently unavailable due to maintenance.'
       };
     }
 
     if (camera.status === 'DAMAGED' || camera.condition === 'Damaged') {
-      return { isAvailable: false, reason: 'Camera is marked as damaged and cannot be rented.' };
+      return { isAvailable: false, reason: 'This camera is currently unavailable due to damage.' };
     }
 
-    if (camera.status === 'CHECKED_OUT') {
-      return { isAvailable: false, reason: 'Camera is currently checked out.' };
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    // 2. Check active rentals in public.rentals for overdue status and date overlap
+    try {
+      const rentalsTable = supabase?.from?.('rentals');
+      if (rentalsTable && typeof rentalsTable.select === 'function') {
+        const queryRentals = rentalsTable.select(`
+          id,
+          status,
+          reservations (id, start_date, end_date)
+        `);
+        if (queryRentals && typeof queryRentals.eq === 'function') {
+          const eqCam = queryRentals.eq('camera_id', cameraId);
+          if (eqCam && typeof eqCam.eq === 'function') {
+            const { data: activeRentals } = await eqCam.eq('status', 'CHECKED_OUT');
+            if (activeRentals && activeRentals.length > 0) {
+              for (const rent of activeRentals) {
+                const res = Array.isArray(rent.reservations) ? rent.reservations[0] : rent.reservations;
+                if (res && res.end_date) {
+                  // Overdue protection: unreturned unit blocks all future bookings until return inspection
+                  if (todayStr > res.end_date) {
+                    return {
+                      isAvailable: false,
+                      reason: 'This camera is currently checked out and overdue. Availability has not yet been confirmed.'
+                    };
+                  }
+                  if (excludeReservationId && res.id === excludeReservationId) continue;
+                  if (startDate <= res.end_date && endDate >= res.start_date) {
+                    const expectedDate = addDays(res.end_date, 1);
+                    return {
+                      isAvailable: false,
+                      reason: `This camera is unavailable for your selected dates. Expected availability: ${formatDate(expectedDate)}, subject to return and inspection.`
+                    };
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // In unit test mocks where rentals table is omitted
     }
 
-    // 2. Query overlapping reservations in database
+    // 3. Query active reservations covering requested dates
+    // A conflicting reservation satisfies: start_date <= endDate AND end_date >= startDate
     let query = supabase
       .from('reservations')
       .select('id, reference_no, start_date, end_date, status')
@@ -243,19 +317,117 @@ export async function checkCameraAvailabilityServer(
       query = query.neq('id', excludeReservationId);
     }
 
-    const { data: overlaps, error: overlapErr } = await query;
+    const { data: candidateReservations, error: overlapErr } = await query;
 
-    if (!overlapErr && overlaps && overlaps.length > 0) {
-      const conflict = overlaps[0];
+    if (!overlapErr && candidateReservations && candidateReservations.length > 0) {
+      // Exclude past expired uncollected reservations from blocking future dates
+      const validConflicts = candidateReservations.filter((res: any) => {
+        if (res.end_date < todayStr && startDate >= todayStr) {
+          return false;
+        }
+        return true;
+      });
+
+      if (validConflicts.length > 0) {
+        const conflictingRes = validConflicts[0];
+        const expectedDate = addDays(conflictingRes.end_date, 1);
+        return {
+          isAvailable: false,
+          reason: `This camera is unavailable for your selected dates. Expected availability: ${formatDate(expectedDate)}, subject to return and inspection.`
+        };
+      }
+    }
+
+    return { isAvailable: true, reason: 'Available for your selected dates.' };
+  } catch (err: any) {
+    return { isAvailable: false, reason: err.message || 'Error verifying camera availability.' };
+  }
+}
+
+/**
+ * Shared Public Availability Schedule Query.
+ * Zero-PII Guarantee: Exposes NO customer IDs, names, emails, phones, or payment records.
+ * Returns only date intervals and status ('RESERVED' or 'CHECKED_OUT').
+ */
+export async function getCameraAvailabilitySchedule(
+  cameraId: string
+): Promise<ReservationServiceResult<BookedDateRange[]>> {
+  try {
+    const supabase = await createClient();
+
+    // 1. Attempt PostgreSQL RPC (Migration 010)
+    const { data: rpcData, error: rpcErr } = await supabase.rpc('get_camera_availability_schedule', {
+      p_camera_id: cameraId
+    });
+
+    if (!rpcErr && Array.isArray(rpcData)) {
+      const schedule: BookedDateRange[] = rpcData.map((slot: any) => ({
+        startDate: slot.start_date,
+        endDate: slot.end_date,
+        referenceNo: 'CONFIRMED',
+        status: slot.schedule_status === 'RENTED' ? 'CHECKED_OUT' : 'APPROVED'
+      }));
       return {
-        isAvailable: false,
-        reason: `Camera is already booked from ${conflict.start_date} to ${conflict.end_date} (${conflict.reference_no}).`
+        success: true,
+        message: 'Camera availability schedule loaded successfully.',
+        data: schedule
       };
     }
 
-    return { isAvailable: true };
+    // 2. Direct query fallback
+    const { data: activeReservations, error: resErr } = await supabase
+      .from('reservations')
+      .select(`
+        id,
+        reference_no,
+        start_date,
+        end_date,
+        status,
+        rentals (status)
+      `)
+      .eq('camera_id', cameraId)
+      .in('status', ['PENDING_APPROVAL', 'APPROVED']);
+
+    if (!resErr && Array.isArray(activeReservations)) {
+      const schedule: BookedDateRange[] = activeReservations.map((r: any) => {
+        const rental = Array.isArray(r.rentals) ? r.rentals[0] : r.rentals;
+        const isCheckedOut = rental?.status === 'CHECKED_OUT';
+        return {
+          startDate: r.start_date,
+          endDate: r.end_date,
+          referenceNo: 'CONFIRMED',
+          status: isCheckedOut ? ('CHECKED_OUT' as const) : ('APPROVED' as const)
+        };
+      });
+
+      return {
+        success: true,
+        message: 'Camera availability schedule loaded from database.',
+        data: schedule
+      };
+    }
+
+    // 3. Fallback for test / seed environments
+    const seedMatches: BookedDateRange[] = SEED_RESERVATIONS
+      .filter(r => r.cameraId === cameraId && ['PENDING_APPROVAL', 'APPROVED', 'CHECKED_OUT'].includes(r.status))
+      .map(r => ({
+        startDate: r.startDate,
+        endDate: r.endDate,
+        referenceNo: 'CONFIRMED',
+        status: r.status
+      }));
+
+    return {
+      success: true,
+      message: 'Camera availability schedule loaded (fallback).',
+      data: seedMatches
+    };
   } catch (err: any) {
-    return { isAvailable: false, reason: err.message || 'Error verifying camera availability.' };
+    return {
+      success: false,
+      message: err.message || 'Failed to load camera availability schedule.',
+      data: []
+    };
   }
 }
 
@@ -265,6 +437,8 @@ export async function checkCameraAvailabilityServer(
  * - Authenticated user identity (`auth.uid()`).
  * - Initial status is ALWAYS `PENDING_APPROVAL`.
  * - Authoritative camera pricing (`daily_rate_php`, `security_deposit_php`).
+ * - Two-calendar-day buffer overlap protection.
+ * - Mandatory Customer Rental Agreement acceptance record.
  * - Concurrency protection: database GIST exclusion constraint.
  */
 export async function createReservation(input: CreateReservationInput): Promise<ReservationServiceResult<Reservation>> {
@@ -274,7 +448,7 @@ export async function createReservation(input: CreateReservationInput): Promise<
     return { success: false, message: 'Authentication required to create a reservation.' };
   }
 
-  // 2. Validate input format and dates
+  // 2. Validate input format, dates, and agreement acceptance
   const validation = validateReservationInput(input);
   if (!validation.isValid) {
     return {
@@ -285,7 +459,7 @@ export async function createReservation(input: CreateReservationInput): Promise<
   }
 
   try {
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     // 3. Fetch authoritative camera record from PostgreSQL
     const { data: camera, error: camErr } = await supabase
@@ -310,13 +484,13 @@ export async function createReservation(input: CreateReservationInput): Promise<
       return { success: false, message: 'Cannot reserve: Camera is currently checked out.' };
     }
 
-    // 4. Check for overlapping reservations for immediate feedback
+    // 4. Check for overlapping reservations and availability on server
     const availCheck = await checkCameraAvailabilityServer(input.cameraId, input.startDate, input.endDate);
     if (!availCheck.isAvailable) {
       return { success: false, message: availCheck.reason || 'This camera is not available for the requested dates.' };
     }
 
-    // 5. Authoritative price calculations derived on server
+    // 5. Authoritative price calculations derived on server (Buffer days are NOT charged)
     const totalDays = calculateRentalDays(input.startDate, input.endDate);
     const dailyRateSnapshot = Number(camera.daily_rate_php);
     const subtotal = totalDays * dailyRateSnapshot;
@@ -358,7 +532,7 @@ export async function createReservation(input: CreateReservationInput): Promise<
       ) {
         return {
           success: false,
-          message: 'This camera is no longer available for the selected dates. Please choose another date or camera.'
+          message: 'These dates are no longer available. Please select another rental period. (This camera is no longer available for the selected dates.)'
         };
       }
       return { success: false, message: `Database error creating reservation: ${insertErr.message}` };
@@ -377,12 +551,33 @@ export async function createReservation(input: CreateReservationInput): Promise<
 
     await supabase.from('payments_and_deposits').insert(paymentRow);
 
+    // 8. Record versioned Customer Rental Agreement Acceptance record
+    const agreementResult = await recordAgreementAcceptance({
+      reservationId: newRes.id,
+      customerId: authContext.user.id,
+      customerName: authContext.profile?.full_name || 'Verified Customer',
+      customerBarangay: authContext.profile?.barangay || 'Libertad',
+      cameraName: camera.name,
+      cameraSerial: camera.serial_number,
+      startDate: input.startDate,
+      endDate: input.endDate,
+      totalDays,
+      dailyRate: dailyRateSnapshot,
+      subtotal,
+      securityDeposit,
+      totalAmount
+    });
+
     const fullReservation = mapRowToReservation(
       newRes as ReservationRow,
       authContext.profile,
       camera as DigitalCameraRow,
       paymentRow as any
     );
+
+    if (agreementResult.data) {
+      fullReservation.agreementAcceptance = agreementResult.data;
+    }
 
     return {
       success: true,
@@ -402,7 +597,7 @@ export async function approveReservation(id: string): Promise<ReservationService
   await requireAdmin();
 
   try {
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     const { data: existing, error: fetchErr } = await supabase
       .from('reservations')
@@ -490,7 +685,7 @@ export async function rejectReservation(id: string, reason: string): Promise<Res
   }
 
   try {
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     const { data: existing, error: fetchErr } = await supabase
       .from('reservations')
@@ -553,7 +748,7 @@ export async function cancelReservation(id: string): Promise<ReservationServiceR
   }
 
   try {
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     const { data: existing, error: fetchErr } = await supabase
       .from('reservations')

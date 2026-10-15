@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useSystem } from '../../context/SystemContext';
 import { DigitalCamera } from '../../types';
 import { StatusBadge } from '../common/StatusBadge';
@@ -8,6 +8,7 @@ import { ConditionBadge } from '../common/ConditionBadge';
 import { CameraFormModal } from './CameraFormModal';
 import { Dialog } from '../common/Dialog';
 import { formatPHP, formatDate, getCameraImageUrl } from '../../lib/utils';
+import { CameraOperationalScheduleState, getCameraOperationalScheduleState } from '../../lib/availabilityEngine';
 import {
   Camera,
   Plus,
@@ -19,8 +20,12 @@ import {
   AlertTriangle,
   Eye,
   Layers,
-  History
+  History,
+  Sparkles,
+  Loader2,
+  X
 } from 'lucide-react';
+import { useFeedback } from '../../context/FeedbackContext';
 
 export const FleetManager: React.FC = () => {
   const { cameras, reservations, addCamera, updateCamera, deleteCamera, setCameraStatus } = useSystem();
@@ -28,7 +33,7 @@ export const FleetManager: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
-  const [conditionFilter, setConditionFilter] = useState('ALL');
+  const [conditionFilter, _setConditionFilter] = useState('ALL');
   const [brandFilter, setBrandFilter] = useState('ALL');
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -36,40 +41,123 @@ export const FleetManager: React.FC = () => {
   const [viewingCamera, setViewingCamera] = useState<DigitalCamera | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleteErrorMessage, setDeleteErrorMessage] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [processingCameraId, setProcessingCameraId] = useState<string | null>(null);
+  const { showSuccess, showError } = useFeedback();
+
+  const showAlert = (message: string, type: 'success' | 'error' = 'success') => {
+    if (type === 'success') {
+      showSuccess(message);
+    } else {
+      showError(message);
+    }
+  };
 
   const [maintenancePromptCamera, setMaintenancePromptCamera] = useState<DigitalCamera | null>(null);
   const [maintenanceReason, setMaintenanceReason] = useState('Sensor cleaning and optical quality check');
 
   const brands = Array.from(new Set(cameras.map(c => c.brand)));
+  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+
+  // Real-time schedule state for each camera in the fleet
+  const cameraSchedules = useMemo(() => {
+    const map = new Map<string, CameraOperationalScheduleState>();
+    cameras.forEach(cam => {
+      map.set(cam.id, getCameraOperationalScheduleState(cam, reservations, todayStr));
+    });
+    return map;
+  }, [cameras, reservations, todayStr]);
 
   const filteredCameras = cameras.filter(cam => {
+    const schedule = cameraSchedules.get(cam.id);
     const matchesSearch =
       cam.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       cam.serialNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
       cam.brand.toLowerCase().includes(searchQuery.toLowerCase()) ||
       cam.model.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCat = categoryFilter === 'ALL' || cam.category === categoryFilter;
-    const matchesStatus = statusFilter === 'ALL' || cam.status === statusFilter;
+
+    let matchesStatus = true;
+    if (statusFilter === 'AVAILABLE_TODAY') {
+      matchesStatus = schedule?.isGenuinelyAvailableToday ?? false;
+    } else if (statusFilter === 'RESERVED_TODAY') {
+      matchesStatus = schedule?.effectiveStatus === 'RESERVED_TODAY';
+    } else if (statusFilter === 'FUTURE_BOOKED') {
+      matchesStatus = schedule?.hasFutureReservations ?? false;
+    } else if (statusFilter === 'PENDING_APPROVAL') {
+      matchesStatus = schedule?.hasPendingReservations ?? false;
+    } else if (statusFilter === 'CHECKED_OUT') {
+      matchesStatus = schedule?.isCheckedOut ?? false;
+    } else if (statusFilter === 'MAINTENANCE') {
+      matchesStatus = (schedule?.isMaintenance || schedule?.isDamaged) ?? false;
+    } else if (statusFilter !== 'ALL') {
+      matchesStatus = cam.status === statusFilter || schedule?.effectiveStatus === statusFilter;
+    }
+
     const matchesCondition = conditionFilter === 'ALL' || cam.condition === conditionFilter;
     const matchesBrand = brandFilter === 'ALL' || cam.brand === brandFilter;
     return matchesSearch && matchesCat && matchesStatus && matchesCondition && matchesBrand;
   });
 
   const handleSaveCamera = async (data: any) => {
-    if (editingCamera) {
-      await updateCamera(editingCamera.id, data);
-    } else {
-      await addCamera(data);
+    try {
+      if (editingCamera) {
+        const res = await updateCamera(editingCamera.id, data);
+        if (res.success) {
+          showAlert(`Camera ${data.name || editingCamera.name} updated successfully.`);
+          setIsModalOpen(false);
+          setEditingCamera(null);
+        } else {
+          showAlert(res.message || 'Failed to update camera.', 'error');
+        }
+      } else {
+        const res = await addCamera(data);
+        if (res.success) {
+          showAlert(`Camera ${data.name} added to fleet inventory.`);
+          setIsModalOpen(false);
+          setEditingCamera(null);
+        } else {
+          showAlert(res.message || 'Failed to add camera.', 'error');
+        }
+      }
+    } catch (err: any) {
+      showAlert(err.message || 'Error saving camera.', 'error');
     }
   };
 
   const handleDeleteCamera = async (id: string) => {
     setDeleteErrorMessage(null);
-    const res = await deleteCamera(id);
-    if (!res.success) {
-      setDeleteErrorMessage(res.message);
-    } else {
-      setDeleteConfirmId(null);
+    setIsDeleting(true);
+    try {
+      const res = await deleteCamera(id);
+      setIsDeleting(false);
+      if (!res.success) {
+        setDeleteErrorMessage(res.message);
+        showAlert(res.message || 'Failed to delete camera.', 'error');
+      } else {
+        showAlert('Camera removed from active fleet inventory.');
+        setDeleteConfirmId(null);
+      }
+    } catch (err: any) {
+      setIsDeleting(false);
+      setDeleteErrorMessage(err.message || 'Error deleting camera.');
+      showAlert(err.message || 'Error deleting camera.', 'error');
+    }
+  };
+
+  const handleToggleMaintenance = async (cam: DigitalCamera, targetStatus: 'AVAILABLE' | 'MAINTENANCE', reason?: string) => {
+    setProcessingCameraId(cam.id);
+    try {
+      const res = await setCameraStatus(cam.id, targetStatus, reason);
+      setProcessingCameraId(null);
+      if (res.success) {
+        showAlert(`Camera ${cam.name} (${cam.serialNumber}) status updated to ${targetStatus}.`);
+      } else {
+        showAlert(res.message || `Failed to update status to ${targetStatus}.`, 'error');
+      }
+    } catch (err: any) {
+      setProcessingCameraId(null);
+      showAlert(err.message || 'Server error updating camera status.', 'error');
     }
   };
 
@@ -135,12 +223,13 @@ export const FleetManager: React.FC = () => {
               onChange={e => setStatusFilter(e.target.value)}
               className="bg-white border border-zinc-200 rounded-lg px-2.5 py-1.5 text-xs text-zinc-700 focus:outline-none focus:border-zinc-900"
             >
-              <option value="ALL">All Statuses</option>
-              <option value="AVAILABLE">AVAILABLE</option>
-              <option value="RESERVED">RESERVED</option>
-              <option value="CHECKED_OUT">CHECKED OUT</option>
-              <option value="MAINTENANCE">MAINTENANCE</option>
-              <option value="DAMAGED">DAMAGED</option>
+              <option value="ALL">All Operational Statuses</option>
+              <option value="AVAILABLE_TODAY">Available Today</option>
+              <option value="RESERVED_TODAY">Reserved Today (Pickup)</option>
+              <option value="FUTURE_BOOKED">Future Bookings</option>
+              <option value="PENDING_APPROVAL">Pending Review Holds</option>
+              <option value="CHECKED_OUT">Checked Out (In Field)</option>
+              <option value="MAINTENANCE">Maintenance / Damaged</option>
             </select>
 
             <select
@@ -208,12 +297,55 @@ export const FleetManager: React.FC = () => {
                     <td className="p-3.5 font-bold text-zinc-900">{formatPHP(cam.dailyRate)}</td>
                     <td className="p-3.5 text-zinc-600">{formatPHP(cam.securityDeposit)}</td>
                     <td className="p-3.5">
-                      <StatusBadge status={cam.status} size="sm" />
-                      {cam.maintenanceNotes && (
-                        <span className="block text-[10px] text-amber-700 mt-0.5 max-w-[120px] truncate" title={cam.maintenanceNotes}>
-                          {cam.maintenanceNotes}
-                        </span>
-                      )}
+                      {(() => {
+                        const sched = cameraSchedules.get(cam.id);
+                        const effectiveStatus = sched ? sched.effectiveStatus : cam.status;
+                        return (
+                          <div className="space-y-1">
+                            <StatusBadge
+                              status={effectiveStatus === 'RESERVED_TODAY' ? 'RESERVED' : (effectiveStatus as any)}
+                              size="sm"
+                            />
+                            {effectiveStatus === 'RESERVED_TODAY' && sched?.activeReservationToday && (
+                              <span className="block text-[10px] text-blue-700 font-mono font-medium">
+                                Pickup: {sched.activeReservationToday.referenceNo}
+                              </span>
+                            )}
+                            {sched && sched.futureApprovedReservations.length > 0 && (
+                              <div className="flex flex-col gap-0.5">
+                                {sched.futureApprovedReservations.slice(0, 2).map(r => (
+                                  <span
+                                    key={r.id}
+                                    className="text-[10px] text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200 inline-block w-fit"
+                                  >
+                                    Booked: {formatDate(r.startDate)}–{formatDate(r.endDate)}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {sched && sched.pendingReservations.length > 0 && (
+                              <div className="flex flex-col gap-0.5">
+                                {sched.pendingReservations.slice(0, 1).map(r => (
+                                  <span
+                                    key={r.id}
+                                    className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 inline-block w-fit"
+                                  >
+                                    Hold: {formatDate(r.startDate)}–{formatDate(r.endDate)}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {cam.maintenanceNotes && (
+                              <span
+                                className="block text-[10px] text-amber-700 mt-0.5 max-w-[140px] truncate"
+                                title={cam.maintenanceNotes}
+                              >
+                                {cam.maintenanceNotes}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="p-3.5 font-medium text-zinc-600">{cam.totalRentalsCount || 0}</td>
                     <td className="p-3.5 text-right">
@@ -241,11 +373,16 @@ export const FleetManager: React.FC = () => {
                           </button>
                         ) : cam.status === 'MAINTENANCE' ? (
                           <button
-                            onClick={() => setCameraStatus(cam.id, 'AVAILABLE')}
-                            className="p-1.5 rounded-md hover:bg-emerald-50 hover:text-emerald-700 text-zinc-400 transition cursor-pointer"
+                            onClick={() => handleToggleMaintenance(cam, 'AVAILABLE')}
+                            disabled={processingCameraId === cam.id}
+                            className="p-1.5 rounded-md hover:bg-emerald-50 hover:text-emerald-700 text-zinc-400 transition cursor-pointer disabled:opacity-50"
                             title="Restore to Available"
                           >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            {processingCameraId === cam.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            )}
                           </button>
                         ) : null}
 
@@ -428,19 +565,30 @@ export const FleetManager: React.FC = () => {
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <button
+                type="button"
+                disabled={processingCameraId === maintenancePromptCamera.id}
                 onClick={() => setMaintenancePromptCamera(null)}
-                className="px-3 py-1.5 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-medium"
+                className="px-3 py-1.5 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-medium cursor-pointer disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
+                type="button"
+                disabled={processingCameraId === maintenancePromptCamera.id}
                 onClick={async () => {
-                  await setCameraStatus(maintenancePromptCamera.id, 'MAINTENANCE', maintenanceReason);
+                  await handleToggleMaintenance(maintenancePromptCamera, 'MAINTENANCE', maintenanceReason);
                   setMaintenancePromptCamera(null);
                 }}
-                className="px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold"
+                className="px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
-                Lock for Service
+                {processingCameraId === maintenancePromptCamera.id ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Locking...</span>
+                  </>
+                ) : (
+                  <span>Lock for Service</span>
+                )}
               </button>
             </div>
           </div>
@@ -460,26 +608,38 @@ export const FleetManager: React.FC = () => {
             </p>
 
             {deleteErrorMessage && (
-              <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-medium">
-                {deleteErrorMessage}
+              <div className="p-3 bg-white border border-zinc-200 rounded-lg text-xs text-zinc-800 font-medium flex items-center gap-2 shadow-xs">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{deleteErrorMessage}</span>
               </div>
             )}
 
             <div className="flex justify-end gap-2.5 pt-2">
               <button
+                type="button"
+                disabled={isDeleting}
                 onClick={() => {
                   setDeleteConfirmId(null);
                   setDeleteErrorMessage(null);
                 }}
-                className="px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-medium cursor-pointer"
+                className="px-3.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-medium cursor-pointer disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
+                type="button"
+                disabled={isDeleting}
                 onClick={() => handleDeleteCamera(deleteConfirmId)}
-                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium cursor-pointer"
+                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
               >
-                Confirm Delete
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <span>Confirm Delete</span>
+                )}
               </button>
             </div>
           </div>

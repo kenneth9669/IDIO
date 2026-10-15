@@ -21,7 +21,7 @@ const PHILIPPINE_ID_TYPES = [
 
 export default function RegisterPage() {
   const router = useRouter();
-  const { signUp, isLoading } = useAuth();
+  const { user, profile, signUp, signOut, isLoading } = useAuth();
   const { isSignedIn: isClerkSignedIn, isLoaded: isClerkLoaded } = useUser();
 
   const [formData, setFormData] = useState({
@@ -102,42 +102,75 @@ export default function RegisterPage() {
 
         {/* Registration Form Card */}
         <div className="bg-white border border-zinc-200 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xs">
-          {/* Clerk Quick Registration – only shown when NOT already signed in */}
-          {isClerkLoaded && !isClerkSignedIn && (
-            <div>
-              <SignUpButton mode="modal">
+          {/* Active Session Status Notice & Isolation */}
+          {(user || (isClerkLoaded && isClerkSignedIn)) ? (
+            <div className="p-6 bg-zinc-50 border border-zinc-200 rounded-xl space-y-4 text-center">
+              <div className="w-12 h-12 rounded-full bg-zinc-100 border border-zinc-200 flex items-center justify-center mx-auto text-zinc-700">
+                <User className="w-6 h-6 stroke-[1.75]" />
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-sm font-bold text-zinc-900">Active Session Detected</h2>
+                <p className="text-xs text-zinc-600">
+                  You are currently signed in as <strong>{profile?.full_name || user?.email || 'Authenticated User'}</strong>.
+                </p>
+                <p className="text-[11px] text-zinc-400">
+                  To register a new customer account, please sign out first.
+                </p>
+              </div>
+              <div className="flex items-center justify-center gap-3 pt-1">
+                <Link
+                  href="/"
+                  className="px-4 py-2 bg-zinc-900 text-white rounded-xl text-xs font-semibold hover:bg-zinc-800 transition"
+                >
+                  Go to Home
+                </Link>
                 <button
                   type="button"
-                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-800 text-xs font-semibold shadow-xs transition"
+                  onClick={() => signOut()}
+                  className="px-4 py-2 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs font-semibold hover:bg-rose-100 transition"
                 >
-                  <Lock className="w-3.5 h-3.5 text-zinc-600" />
-                  <span>Fast Sign Up with Clerk</span>
+                  Sign Out to Register
                 </button>
-              </SignUpButton>
-              <div className="relative my-3">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-zinc-200" />
-                </div>
-                <div className="relative flex justify-center text-[10px] uppercase">
-                  <span className="bg-white px-2 text-zinc-400 font-medium">or fill local Butuan registration</span>
-                </div>
               </div>
             </div>
-          )}
+          ) : (
+            <>
+              {/* Clerk Quick Registration – only shown when NOT already signed in */}
+              {isClerkLoaded && !isClerkSignedIn && (
+                <div>
+                  <SignUpButton mode="modal">
+                    <button
+                      type="button"
+                      className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-800 text-xs font-semibold shadow-xs transition"
+                    >
+                      <Lock className="w-3.5 h-3.5 text-zinc-600" />
+                      <span>Fast Sign Up with Clerk</span>
+                    </button>
+                  </SignUpButton>
+                  <div className="relative my-3">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-zinc-200" />
+                    </div>
+                    <div className="relative flex justify-center text-[10px] uppercase">
+                      <span className="bg-white px-2 text-zinc-400 font-medium">or fill local Butuan registration</span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
-          {errorMessage && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
-              <span>{errorMessage}</span>
-            </div>
-          )}
+              {errorMessage && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
+                  <span>{errorMessage}</span>
+                </div>
+              )}
 
-          {successMessage && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-700 text-xs flex items-start gap-2">
-              <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
-              <span>{successMessage}</span>
-            </div>
-          )}
+              {successMessage && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-700 text-xs flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
+                  <span>{successMessage}</span>
+                </div>
+              )}
 
           <form onSubmit={handleSubmit} className="space-y-4 text-xs">
             {/* Full Name & Phone */}
@@ -324,6 +357,8 @@ export default function RegisterPage() {
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>
+          </>
+          )}
 
           <div className="text-center pt-2 border-t border-zinc-100">
             <p className="text-xs text-zinc-500">

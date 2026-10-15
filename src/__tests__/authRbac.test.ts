@@ -1,7 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { UserRole, ProfileRow } from '../types/database';
-import { requireAuth, requireRole, requireAdmin, requireCustomer, AuthenticatedContext } from '../lib/auth';
+import { requireAuth, requireRole, requireAdmin, requireCustomer, getAuthenticatedUser, AuthenticatedContext } from '../lib/auth';
 import { validateRole, validateOwnershipOrAdmin } from '../lib/domainService';
+import { signUpCustomerAction, updateCustomerProfileAction, updateUserRoleAction } from '../app/actions/authActions';
+
+vi.mock('next/cache', () => ({
+  revalidatePath: vi.fn()
+}));
+
+vi.mock('@clerk/nextjs/server', () => ({
+  currentUser: vi.fn()
+}));
+
+import { currentUser } from '@clerk/nextjs/server';
 
 // Mock user profiles
 const mockAdminProfile: ProfileRow = {
@@ -240,6 +251,321 @@ describe('Phase 3: Supabase Authentication & Server-Side RBAC Infrastructure', (
       const adminOverride = validateOwnershipOrAdmin(adminUser, customerUser.id, 'Inspect Rental Handover');
       expect(adminOverride.success).toBe(true);
       expect(adminOverride.message).toContain('Authorized (Elevated Role)');
+    });
+  });
+
+  describe('6. SEC-01 Profile Role Escalation Protections (Unit & Workflow Tests)', () => {
+    // Note: These unit tests exercise the Node.js server actions, server RBAC guards, and fail-closed logic.
+    // Live database triggers (trg_protect_profile_role) and PostgreSQL RLS policies operate at the PostgreSQL engine level
+    // and require live database execution with superuser permissions, which is verified via SQL static analysis.
+
+    it('permits legitimate customer registration and assigns strictly CUSTOMER role', async () => {
+      const mockInsert = vi.fn().mockResolvedValue({ error: null });
+      vi.mocked(createClient).mockResolvedValue({
+        auth: {
+          signUp: vi.fn().mockResolvedValue({
+            data: { user: { id: 'new-user-123', email: 'customer.new@gmail.com' } },
+            error: null
+          })
+        },
+        from: vi.fn().mockReturnValue({
+          insert: mockInsert
+        })
+      } as any);
+
+      const result = await signUpCustomerAction({
+        email: 'customer.new@gmail.com',
+        password: 'securepassword123',
+        fullName: 'New Customer',
+        phone: '0917-123-4567',
+        barangay: 'Libertad',
+        streetAddress: 'Purok 1',
+        idType: 'PhilSys ID',
+        idNumber: '1234-5678-9012'
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.role).toBe('CUSTOMER');
+      expect(mockInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: 'CUSTOMER',
+          email: 'customer.new@gmail.com'
+        })
+      );
+    });
+
+    it('rejects customer attempting to create an ADMIN profile during registration', async () => {
+      const maliciousPayload = {
+        email: 'attacker@gmail.com',
+        password: 'password123',
+        fullName: 'Attacker Attempting Escalation',
+        phone: '0917-000-0000',
+        barangay: 'Libertad',
+        streetAddress: 'Street 1',
+        idType: 'Driver License',
+        idNumber: 'D123',
+        role: 'ADMIN'
+      } as any;
+      const result = await signUpCustomerAction(maliciousPayload);
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Unauthorized');
+    });
+
+    it('rejects customer attempting to change their own role from CUSTOMER to ADMIN via profile update', async () => {
+      // Mock authenticated session as CUSTOMER
+      vi.mocked(createClient).mockResolvedValue({
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: mockCustomerProfile.id, email: mockCustomerProfile.email } },
+            error: null
+          })
+        },
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              single: vi.fn().mockResolvedValue({ data: mockCustomerProfile, error: null })
+            })
+          })
+        })
+      } as any);
+
+      const updateResult = await updateCustomerProfileAction({
+        fullName: 'Jennelyn Updated',
+        role: 'ADMIN' // Malicious attempt to escalate role
+      });
+
+      expect(updateResult.success).toBe(false);
+      expect(updateResult.message).toContain('Unauthorized: Role cannot be modified through profile update.');
+    });
+
+    it('allows customer to update non-privileged profile information without mutating role', async () => {
+      const mockUpdate = vi.fn().mockReturnValue({
+        eq: vi.fn().mockResolvedValue({ error: null })
+      });
+
+      vi.mocked(createClient).mockResolvedValue({
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: mockCustomerProfile.id, email: mockCustomerProfile.email } },
+            error: null
+          })
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'profiles') {
+            return {
+              select: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  single: vi.fn().mockResolvedValue({ data: mockCustomerProfile, error: null })
+                })
+              }),
+              update: mockUpdate
+            };
+          }
+          return {} as any;
+        })
+      } as any);
+
+      const updateResult = await updateCustomerProfileAction({
+        phone: '0919-999-8888',
+        barangay: 'San Vicente'
+      });
+
+      expect(updateResult.success).toBe(true);
+      expect(updateResult.role).toBe('CUSTOMER');
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.not.objectContaining({ role: expect.anything() })
+      );
+    });
+
+    it('strictly forbids a customer from updating another user role via administrative action', async () => {
+      // Authenticated as CUSTOMER
+      vi.mocked(createClient).mockResolvedValue({
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: mockCustomerProfile.id, email: mockCustomerProfile.email } },
+            error: null
+          })
+        },
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              single: vi.fn().mockResolvedValue({ data: mockCustomerProfile, error: null })
+            })
+          })
+        })
+      } as any);
+
+      // Customer attempts to call administrative role update
+      await expect(
+        updateUserRoleAction(mockCustomerProfile.id, 'ADMIN')
+      ).rejects.toThrow(/Forbidden: Role 'CUSTOMER' is not authorized/);
+    });
+
+    it('forbids unauthenticated caller from executing role management', async () => {
+      // Unauthenticated
+      vi.mocked(createClient).mockResolvedValue({
+        auth: {
+          getUser: vi.fn().mockResolvedValue({ data: { user: null }, error: null })
+        },
+        from: vi.fn()
+      } as any);
+      vi.mocked(currentUser).mockResolvedValue(null);
+
+      await expect(
+        updateUserRoleAction('any-user-id', 'ADMIN')
+      ).rejects.toThrow('Unauthorized: Authentication required.');
+    });
+
+    it('allows verified administrator to update a customer role through authorized workflow', async () => {
+      const mockUpdate = vi.fn().mockReturnValue({
+        eq: vi.fn().mockResolvedValue({ error: null })
+      });
+
+      vi.mocked(createClient).mockResolvedValue({
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: mockAdminProfile.id, email: mockAdminProfile.email } },
+            error: null
+          })
+        },
+        from: vi.fn().mockImplementation((table: string) => {
+          if (table === 'profiles') {
+            return {
+              select: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  single: vi.fn().mockResolvedValue({ data: mockAdminProfile, error: null })
+                })
+              }),
+              update: mockUpdate
+            };
+          }
+          return {} as any;
+        })
+      } as any);
+
+      const result = await updateUserRoleAction(mockCustomerProfile.id, 'ADMIN');
+
+      expect(result.success).toBe(true);
+      expect(result.role).toBe('ADMIN');
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ role: 'ADMIN' })
+      );
+    });
+
+    it('prevents an active administrator from accidentally demoting their own account', async () => {
+      vi.mocked(createClient).mockResolvedValue({
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: mockAdminProfile.id, email: mockAdminProfile.email } },
+            error: null
+          })
+        },
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              single: vi.fn().mockResolvedValue({ data: mockAdminProfile, error: null })
+            })
+          })
+        })
+      } as any);
+
+      const result = await updateUserRoleAction(mockAdminProfile.id, 'CUSTOMER');
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Cannot demote the currently authenticated active administrator');
+    });
+
+    it('rejects assigning invalid/disallowed roles (such as legacy STAFF)', async () => {
+      vi.mocked(createClient).mockResolvedValue({
+        auth: {
+          getUser: vi.fn().mockResolvedValue({
+            data: { user: { id: mockAdminProfile.id, email: mockAdminProfile.email } },
+            error: null
+          })
+        },
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              single: vi.fn().mockResolvedValue({ data: mockAdminProfile, error: null })
+            })
+          })
+        })
+      } as any);
+
+      const result = await updateUserRoleAction(mockCustomerProfile.id, 'STAFF' as any);
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Permitted roles are strictly CUSTOMER or ADMIN.');
+    });
+
+    it('fails closed when a Clerk session matches an ADMIN profile email but has mismatched clerk_id', async () => {
+      // Supabase auth returns null so Clerk session is used
+      vi.mocked(createClient).mockResolvedValue({
+        auth: {
+          getUser: vi.fn().mockResolvedValue({ data: { user: null }, error: null })
+        },
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            or: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: {
+                  ...mockAdminProfile,
+                  clerk_id: 'clerk_legit_admin_id'
+                }
+              })
+            })
+          })
+        })
+      } as any);
+
+      // Incoming Clerk user presenting admin's email from an unlinked account
+      vi.mocked(currentUser).mockResolvedValue({
+        id: 'clerk_attacker_id_999',
+        emailAddresses: [{ emailAddress: mockAdminProfile.email }],
+        firstName: 'Attacker',
+        lastName: 'Clerk'
+      } as any);
+
+      const authContext = await getAuthenticatedUser();
+
+      expect(authContext).not.toBeNull();
+      // MUST NOT be elevated to ADMIN
+      expect(authContext?.role).toBe('CUSTOMER');
+    });
+
+    it('allows Clerk session with explicitly matched clerk_id to receive ADMIN role', async () => {
+      const verifiedClerkId = 'clerk_legit_admin_123';
+
+      vi.mocked(createClient).mockResolvedValue({
+        auth: {
+          getUser: vi.fn().mockResolvedValue({ data: { user: null }, error: null })
+        },
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            or: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: {
+                  ...mockAdminProfile,
+                  clerk_id: verifiedClerkId
+                }
+              })
+            })
+          })
+        })
+      } as any);
+
+      vi.mocked(currentUser).mockResolvedValue({
+        id: verifiedClerkId,
+        emailAddresses: [{ emailAddress: mockAdminProfile.email }],
+        firstName: 'Dave',
+        lastName: 'Admin'
+      } as any);
+
+      const authContext = await getAuthenticatedUser();
+
+      expect(authContext).not.toBeNull();
+      expect(authContext?.role).toBe('ADMIN');
     });
   });
 });

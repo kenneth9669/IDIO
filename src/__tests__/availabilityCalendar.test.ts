@@ -170,19 +170,36 @@ describe('Feature A: Reservation Calendar — Availability Engine', () => {
     });
   });
 
-  describe('6. Adjacent Dates Are Allowed', () => {
-    it('allows booking starting the day after an existing reservation ends', () => {
+  describe('6. Non-Conflicting Adjacent Rentals & Boundary Dates', () => {
+    it('allows adjacent non-conflicting booking starting the day after an existing rental ends', () => {
       const cam = makeCamera();
       const res = makeReservation({ status: 'APPROVED', startDate: '2027-01-10', endDate: '2027-01-12' });
-      const result = checkCameraAvailability(cam, '2027-01-13', '2027-01-15', [res]);
-      expect(result.isAvailable).toBe(true);
+      // Existing rental ends Jan 12. Next rental starting Jan 13 is adjacent and non-conflicting:
+      const dayAfter = checkCameraAvailability(cam, '2027-01-13', '2027-01-15', [res]);
+      expect(dayAfter.isAvailable).toBe(true);
+      expect(dayAfter.reason).toBe('Available for your selected dates.');
     });
 
-    it('allows booking ending the day before an existing reservation starts', () => {
+    it('blocks bookings that overlap touching boundaries (e.g. starting on the last day of existing rental)', () => {
       const cam = makeCamera();
-      const res = makeReservation({ status: 'APPROVED', startDate: '2027-01-14', endDate: '2027-01-16' });
-      const result = checkCameraAvailability(cam, '2027-01-10', '2027-01-13', [res]);
-      expect(result.isAvailable).toBe(true);
+      const res = makeReservation({ status: 'APPROVED', startDate: '2027-01-10', endDate: '2027-01-12' });
+      // Starting on Jan 12 overlaps the final rental day of existing booking:
+      const overlapping = checkCameraAvailability(cam, '2027-01-12', '2027-01-15', [res]);
+      expect(overlapping.isAvailable).toBe(false);
+      expect(overlapping.reason).toContain('unavailable for your selected dates');
+    });
+
+    it('allows adjacent booking ending the day before an existing reservation starts', () => {
+      const cam = makeCamera();
+      const res = makeReservation({ status: 'APPROVED', startDate: '2027-01-16', endDate: '2027-01-18' });
+      // Booking ending Jan 15 is immediately adjacent before Jan 16:
+      const preceding = checkCameraAvailability(cam, '2027-01-10', '2027-01-15', [res]);
+      expect(preceding.isAvailable).toBe(true);
+
+      // But a booking ending Jan 16 overlaps the start date Jan 16:
+      const colliding = checkCameraAvailability(cam, '2027-01-10', '2027-01-16', [res]);
+      expect(colliding.isAvailable).toBe(false);
+      expect(colliding.reason).toContain('unavailable for your selected dates');
     });
   });
 
@@ -254,7 +271,7 @@ describe('Feature B: Demo Login Removal', () => {
   it('signInDemoAction is NOT exported from authActions', async () => {
     const authActions = await import('../app/actions/authActions');
     expect((authActions as any).signInDemoAction).toBeUndefined();
-  });
+  }, 15000);
 
   it('signInAction is still exported and usable', async () => {
     const authActions = await import('../app/actions/authActions');

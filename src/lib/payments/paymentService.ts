@@ -15,6 +15,7 @@ import {
   validatePaymentTransition,
   validateDepositTransition,
   validateDepositDeduction,
+  validatePaymentMethodForNewTransaction,
   ConfirmPaymentInput,
   RefundPaymentInput,
   SettleDepositInput
@@ -80,7 +81,7 @@ export async function getPayments(filters?: {
       return { success: false, message: 'Unauthorized: Please log in to view financial records.' };
     }
 
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     let query = supabase
       .from('payments_and_deposits')
@@ -156,7 +157,7 @@ export async function getPaymentById(id: string): Promise<PaymentServiceResult<P
       return { success: false, message: 'Unauthorized: Please log in.' };
     }
 
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     const { data, error } = await supabase
       .from('payments_and_deposits')
@@ -206,7 +207,7 @@ export async function getPaymentByReservationId(reservationId: string): Promise<
       return { success: false, message: 'Unauthorized: Please log in.' };
     }
 
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     const { data, error } = await supabase
       .from('payments_and_deposits')
@@ -265,7 +266,7 @@ export async function confirmPayment(input: ConfirmPaymentInput): Promise<Paymen
   }
 
   try {
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     // 1. Fetch existing payment record
     const { data: existing, error: fetchErr } = await supabase
@@ -299,6 +300,10 @@ export async function confirmPayment(input: ConfirmPaymentInput): Promise<Paymen
     };
 
     if (input.paymentMethod) {
+      const methodCheck = validatePaymentMethodForNewTransaction(input.paymentMethod);
+      if (!methodCheck.isValid) {
+        return { success: false, message: methodCheck.errors[0] };
+      }
       updatePayload.payment_method = input.paymentMethod;
     }
 
@@ -358,7 +363,7 @@ export async function refundPayment(input: RefundPaymentInput): Promise<PaymentS
   }
 
   try {
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     // 1. Fetch existing payment record
     const { data: existing, error: fetchErr } = await supabase
@@ -444,7 +449,7 @@ export async function settleSecurityDeposit(input: SettleDepositInput): Promise<
   }
 
   try {
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     // 1. Fetch existing payment record
     const { data: existing, error: fetchErr } = await supabase

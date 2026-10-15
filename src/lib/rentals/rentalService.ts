@@ -92,7 +92,7 @@ export async function getRentals(filters?: {
       return { success: false, message: 'Unauthorized: Please log in to view rentals.' };
     }
 
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     let query = supabase
       .from('rentals')
@@ -165,7 +165,7 @@ export async function getRentalById(id: string): Promise<RentalServiceResult<Ren
       return { success: false, message: 'Unauthorized: Please log in.' };
     }
 
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     const { data, error } = await supabase
       .from('rentals')
@@ -214,7 +214,7 @@ export async function getRentalByReservationId(reservationId: string): Promise<R
       return { success: false, message: 'Unauthorized: Please log in.' };
     }
 
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     const { data, error } = await supabase
       .from('rentals')
@@ -276,7 +276,7 @@ export async function checkoutRental(input: CheckoutRentalInput): Promise<Rental
   }
 
   try {
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     // 1. Fetch reservation
     const { data: reservation, error: resErr } = await supabase
@@ -433,7 +433,7 @@ export async function processReturn(input: ReturnRentalInput): Promise<RentalSer
   }
 
   try {
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     // 1. Fetch rental record
     const { data: rental, error: fetchErr } = await supabase

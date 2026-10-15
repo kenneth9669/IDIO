@@ -22,6 +22,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { CameraFormModal } from './CameraFormModal';
+import { getCameraOperationalScheduleState } from '../../lib/availabilityEngine';
 
 interface AdminDashboardProps {
   onNavigateTab: (tab: any) => void;
@@ -34,14 +35,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigateTab })
 
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // 1. Core aggregations derived from real records
-  const totalCameras = cameras.length;
-  const availableCameras = cameras.filter(c => c.status === 'AVAILABLE');
-  const reservedCameras = cameras.filter(c => c.status === 'RESERVED');
-  const checkedOutCameras = cameras.filter(c => c.status === 'CHECKED_OUT');
-  const maintenanceCameras = cameras.filter(c => c.status === 'MAINTENANCE' || c.status === 'DAMAGED');
+  // 1. Authoritative fleet operational and reservation schedules
+  const fleetSchedules = useMemo(() => {
+    return cameras.map(cam => ({
+      camera: cam,
+      schedule: getCameraOperationalScheduleState(cam, reservations, todayStr)
+    }));
+  }, [cameras, reservations, todayStr]);
 
-  const pendingReservations = reservations.filter(r => r.status === 'PENDING_APPROVAL');
+  const totalCameras = cameras.length;
+  // Genuinely available today for counter rental (no maintenance, not damaged, not checked out, no pickup today)
+  const genuinelyAvailableToday = fleetSchedules.filter(f => f.schedule.isGenuinelyAvailableToday);
+  // Reserved today (approved reservation active today awaiting or in pickup)
+  const currentlyReservedToday = fleetSchedules.filter(f => f.schedule.effectiveStatus === 'RESERVED_TODAY');
+  // Cameras with future approved reservations starting after today
+  const futureReservedCameras = fleetSchedules.filter(f => f.schedule.hasFutureReservations);
+  // Cameras with pending booking requests that hold inventory
+  const pendingHoldCameras = fleetSchedules.filter(f => f.schedule.hasPendingReservations);
+  // Cameras checked out in customer possession
+  const checkedOutCameras = fleetSchedules.filter(f => f.schedule.isCheckedOut);
+  // Cameras in maintenance or damaged
+  const maintenanceCameras = fleetSchedules.filter(f => f.schedule.isMaintenance || f.schedule.isDamaged);
+
+  const pendingReservations = reservations.filter(r => r.status === 'PENDING_APPROVAL' && r.endDate >= todayStr);
   const approvedReservations = reservations.filter(r => r.status === 'APPROVED');
   const activeRentals = reservations.filter(r => r.status === 'CHECKED_OUT');
 
@@ -112,23 +128,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigateTab })
 
       {/* Critical Overdue Alerts Banner */}
       {overdueRentals.length > 0 && (
-        <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+        <div className="p-4 bg-white border border-zinc-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-rose-100 text-rose-800">
-              <AlertTriangle className="w-5 h-5" />
+            <div className="w-9 h-9 rounded-full border border-rose-200 bg-white flex items-center justify-center text-rose-600 shrink-0">
+              <AlertTriangle className="w-4 h-4 stroke-[2]" />
             </div>
             <div>
-              <h4 className="text-xs font-bold text-rose-900">
+              <h4 className="text-xs font-bold text-zinc-900">
                 {overdueRentals.length} Overdue Camera Rental{overdueRentals.length > 1 ? 's' : ''} Detected
               </h4>
-              <p className="text-xs text-rose-700">
+              <p className="text-xs text-zinc-500">
                 Equipment has passed the agreed return date. Contact customers immediately for return inspection.
               </p>
             </div>
           </div>
           <button
             onClick={() => onNavigateTab('rentals')}
-            className="px-3 py-1.5 rounded-lg bg-rose-700 hover:bg-rose-800 text-white font-medium text-xs transition cursor-pointer self-start sm:self-auto"
+            className="px-3.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white font-medium text-xs transition cursor-pointer self-start sm:self-auto shadow-xs"
           >
             Inspect Returns
           </button>
@@ -150,30 +166,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigateTab })
           <span className="text-[10px] text-zinc-400">Registered assets</span>
         </div>
 
-        {/* 2. Available */}
+        {/* 2. Available Today */}
         <div
           onClick={() => onNavigateTab('cameras')}
           className="p-4 bg-white border border-zinc-200 rounded-xl space-y-1 hover:border-zinc-300 transition cursor-pointer shadow-xs"
         >
           <div className="flex items-center justify-between text-zinc-500 text-xs">
-            <span>Available</span>
+            <span>Available Today</span>
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
           </div>
-          <p className="text-xl font-bold text-emerald-600">{availableCameras.length}</p>
-          <span className="text-[10px] text-zinc-400">Ready for booking</span>
+          <p className="text-xl font-bold text-emerald-600">{genuinelyAvailableToday.length}</p>
+          <span className="text-[10px] text-zinc-400">Ready for counter rental</span>
         </div>
 
-        {/* 3. Reserved */}
+        {/* 3. Reserved / Booked */}
         <div
           onClick={() => onNavigateTab('reservations')}
           className="p-4 bg-white border border-zinc-200 rounded-xl space-y-1 hover:border-zinc-300 transition cursor-pointer shadow-xs"
         >
           <div className="flex items-center justify-between text-zinc-500 text-xs">
-            <span>Reserved</span>
+            <span>Reserved / Booked</span>
             <CalendarCheck className="w-3.5 h-3.5 text-blue-600" />
           </div>
-          <p className="text-xl font-bold text-blue-600">{approvedReservations.length + reservedCameras.length}</p>
-          <span className="text-[10px] text-zinc-400">Pickup ready / lock</span>
+          <p className="text-xl font-bold text-blue-600">
+            {currentlyReservedToday.length + futureReservedCameras.length}
+          </p>
+          <span className="text-[10px] text-zinc-400">
+            {currentlyReservedToday.length} today • {futureReservedCameras.length} future
+          </span>
         </div>
 
         {/* 4. Checked Out */}
@@ -212,7 +232,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigateTab })
             <Clock className="w-3.5 h-3.5 text-amber-500" />
           </div>
           <p className="text-xl font-bold text-zinc-900">{pendingReservations.length}</p>
-          <span className="text-[10px] text-zinc-400">Awaiting admin review</span>
+          <span className="text-[10px] text-zinc-400">
+            {pendingHoldCameras.length > 0 ? `${pendingHoldCameras.length} camera(s) hold inventory` : 'Awaiting admin review'}
+          </span>
         </div>
 
         {/* 7. Active Rentals */}
@@ -286,6 +308,145 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigateTab })
           </div>
           <p className="text-xl font-bold text-zinc-900">{formatPHP(outstandingBalance)}</p>
           <span className="text-[10px] text-zinc-400">Pending collections</span>
+        </div>
+      </div>
+
+      {/* Fleet Real-Time Availability & Schedule Breakdown */}
+      <div className="bg-white border border-zinc-200 rounded-xl p-5 space-y-4 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-zinc-100">
+          <div>
+            <h3 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
+              <Camera className="w-4 h-4 text-zinc-700" />
+              Fleet Availability &amp; Reservation Schedule
+            </h3>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              Authoritative real-time schedule showing physical readiness, today&apos;s status, and active date-range holds across all cameras.
+            </p>
+          </div>
+          <button
+            onClick={() => onNavigateTab('cameras')}
+            className="text-xs text-zinc-600 hover:text-zinc-900 font-medium flex items-center gap-1 cursor-pointer self-start sm:self-auto"
+          >
+            Manage Fleet <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-zinc-100 text-zinc-400 font-medium uppercase tracking-wider text-[10px]">
+                <th className="py-2.5 px-3">Camera</th>
+                <th className="py-2.5 px-3">Status Today</th>
+                <th className="py-2.5 px-3">Active / Future Reservations</th>
+                <th className="py-2.5 px-3 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100">
+              {fleetSchedules.map(({ camera, schedule }) => {
+                const badge = (() => {
+                  switch (schedule.effectiveStatus) {
+                    case 'AVAILABLE':
+                      return (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Available Today
+                        </span>
+                      );
+                    case 'RESERVED_TODAY':
+                      return (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-200">
+                          <CalendarCheck className="w-3 h-3 text-blue-600" /> Pickup Today ({schedule.activeReservationToday?.referenceNo})
+                        </span>
+                      );
+                    case 'CHECKED_OUT':
+                      return (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          <SlidersHorizontal className="w-3 h-3 text-indigo-600" /> In Field (Rented)
+                        </span>
+                      );
+                    case 'OVERDUE':
+                      return (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-50 text-rose-700 border border-rose-200">
+                          <AlertTriangle className="w-3 h-3 text-rose-600" /> Overdue Return
+                        </span>
+                      );
+                    case 'MAINTENANCE':
+                      return (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                          <Wrench className="w-3 h-3 text-amber-600" /> In Maintenance
+                        </span>
+                      );
+                    case 'DAMAGED':
+                      return (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-50 text-rose-700 border border-rose-200">
+                          <AlertCircle className="w-3 h-3 text-rose-600" /> Damaged / Lockout
+                        </span>
+                      );
+                  }
+                })();
+
+                return (
+                  <tr key={camera.id} className="hover:bg-zinc-50/50 transition">
+                    <td className="py-3 px-3">
+                      <div className="font-semibold text-zinc-900">{camera.name}</div>
+                      <div className="text-[11px] text-zinc-400 font-mono">{camera.serialNumber} • {camera.brand} {camera.model}</div>
+                    </td>
+                    <td className="py-3 px-3">
+                      {badge}
+                    </td>
+                    <td className="py-3 px-3">
+                      <div className="space-y-1">
+                        {schedule.futureApprovedReservations.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {schedule.futureApprovedReservations.map(res => (
+                              <span key={res.id} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                                <strong>{formatDate(res.startDate)} – {formatDate(res.endDate)}</strong> ({res.referenceNo})
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {schedule.pendingReservations.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {schedule.pendingReservations.map(res => (
+                              <span key={res.id} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                                <Clock className="w-2.5 h-2.5" /> Hold: <strong>{formatDate(res.startDate)} – {formatDate(res.endDate)}</strong> (Pending)
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {!schedule.hasFutureReservations && !schedule.hasPendingReservations && schedule.effectiveStatus === 'AVAILABLE' && (
+                          <span className="text-[11px] text-zinc-400">No scheduled holds. Completely open for rental.</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="py-3 px-3 text-right">
+                      {schedule.hasPendingReservations ? (
+                        <button
+                          onClick={() => onNavigateTab('reservations')}
+                          className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-700 text-white font-medium text-[11px] transition cursor-pointer"
+                        >
+                          Review Hold
+                        </button>
+                      ) : schedule.effectiveStatus === 'RESERVED_TODAY' ? (
+                        <button
+                          onClick={() => onNavigateTab('rentals')}
+                          className="px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-white font-medium text-[11px] transition cursor-pointer"
+                        >
+                          Counter Checkout
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => onNavigateTab('cameras')}
+                          className="px-2.5 py-1 rounded bg-zinc-100 hover:bg-zinc-200 text-zinc-700 font-medium text-[11px] transition cursor-pointer"
+                        >
+                          View Unit
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
 

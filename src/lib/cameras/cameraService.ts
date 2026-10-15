@@ -131,7 +131,7 @@ export async function createCamera(input: CameraInput): Promise<CameraServiceRes
   }
 
   try {
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     // Generate clean inventory ID if not provided (e.g. CAM-009)
     let inventoryId = input.id?.trim();
@@ -228,7 +228,7 @@ export async function updateCamera(id: string, input: Partial<CameraInput>): Pro
   }
 
   try {
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     // Check existing camera
     const { data: existing, error: fetchErr } = await supabase
@@ -339,7 +339,7 @@ export async function deleteCamera(id: string): Promise<CameraServiceResult> {
   await requireAdmin();
 
   try {
-    const supabase = await createClient();
+    const supabase = await createClient({ requireAuth: true });
 
     // Check if camera has active reservations or rentals
     const { data: activeRentals, error: checkErr } = await supabase

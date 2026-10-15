@@ -24,8 +24,9 @@ export const CustomerPayments: React.FC = () => {
 
   const customerId = currentUser.id;
 
-  // Scoped payments for this customer
+  // Scoped payments for this customer (strictly scoped to verified user ID)
   const customerPayments = useMemo(() => {
+    if (!customerId) return [];
     // Also build records from reservations if payments table is empty or missing reservations
     const list = payments.filter((p) => p.customerId === customerId);
 
@@ -106,10 +107,10 @@ export const CustomerPayments: React.FC = () => {
             className="bg-white border border-zinc-300 rounded-lg px-3 py-1.5 text-xs text-zinc-800 font-medium focus:outline-none focus:ring-1 focus:ring-zinc-900"
           >
             <option value="ALL">All Methods</option>
-            <option value="GCASH">GCash</option>
-            <option value="MAYA">Maya</option>
-            <option value="CASH_PICKUP">Cash on Pickup</option>
-            <option value="BANK_TRANSFER">Bank Transfer</option>
+            <option value="CASH_PICKUP">Cash on Counter Pickup (Active)</option>
+            <option value="GCASH">GCash (Historical)</option>
+            <option value="MAYA">Maya (Historical)</option>
+            <option value="BANK_TRANSFER">Bank Transfer (Historical)</option>
           </select>
         </div>
       </div>

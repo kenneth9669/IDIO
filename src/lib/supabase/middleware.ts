@@ -53,7 +53,7 @@ export async function updateSession(request: NextRequest) {
 
     if (!profile || profile.role !== 'ADMIN') {
       const url = request.nextUrl.clone();
-      url.pathname = '/';
+      url.pathname = '/login';
       url.searchParams.set('error', 'unauthorized_admin_access');
       return NextResponse.redirect(url);
     }
@@ -67,20 +67,6 @@ export async function updateSession(request: NextRequest) {
       url.searchParams.set('redirect', pathname);
       return NextResponse.redirect(url);
     }
-  }
-
-  // Redirect authenticated users away from /login or /register if already logged in
-  if ((pathname === '/login' || pathname === '/register') && user) {
-    // Check role for redirect destination
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-
-    const url = request.nextUrl.clone();
-    url.pathname = profile?.role === 'ADMIN' ? '/admin' : '/';
-    return NextResponse.redirect(url);
   }
 
   return supabaseResponse;

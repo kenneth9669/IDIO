@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   MapPin
 } from 'lucide-react';
+import { useFeedback } from '../../context/FeedbackContext';
 
 interface CustomerCatalogProps {
   onReservationComplete?: (referenceNo: string) => void;
@@ -32,7 +33,7 @@ export const CustomerCatalog: React.FC<CustomerCatalogProps> = ({ onReservationC
   const [filterEndDate, setFilterEndDate] = useState('');
   const [selectedCameraForDetail, setSelectedCameraForDetail] = useState<DigitalCamera | null>(null);
   const [selectedCameraForReserve, setSelectedCameraForReserve] = useState<DigitalCamera | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const { showSuccess } = useFeedback();
 
   const categories: { label: string; value: string }[] = [
     { label: 'All Digital Cameras', value: 'ALL' },
@@ -65,26 +66,15 @@ export const CustomerCatalog: React.FC<CustomerCatalogProps> = ({ onReservationC
   }, [cameras, searchQuery, selectedCategory, selectedBrand]);
 
   const handleReservationSuccess = (refNo: string) => {
-    setToastMessage(`Reservation ${refNo} placed successfully! You can track its status in "My Bookings".`);
-    setTimeout(() => setToastMessage(null), 6000);
+    showSuccess(
+      `Reservation ${refNo} placed successfully! You can track its status and pickup voucher in "My Bookings".`,
+      'Reservation Placed'
+    );
     if (onReservationComplete) onReservationComplete(refNo);
   };
 
   return (
     <div className="space-y-8">
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 p-4 bg-zinc-900 text-white font-medium text-xs rounded-xl shadow-xl flex items-center gap-3 animate-in slide-in-from-bottom-5">
-          <Sparkles className="w-4 h-4 text-white shrink-0" />
-          <span>{toastMessage}</span>
-          <button
-            onClick={() => setToastMessage(null)}
-            className="ml-2 text-zinc-400 hover:text-white"
-          >
-            ✕
-          </button>
-        </div>
-      )}
 
       {/* Hero Section */}
       <div className="relative rounded-2xl overflow-hidden bg-white border border-zinc-200 p-8 sm:p-10 shadow-xs">

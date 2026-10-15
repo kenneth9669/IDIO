@@ -1,14 +1,14 @@
 'use client';
 
 import React, { useMemo, useState, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, AlertCircle, Info } from 'lucide-react';
 import { RentalStatus } from '../../types';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface BookedRange {
-  startDate: string; // YYYY-MM-DD
-  endDate: string;   // YYYY-MM-DD
+  startDate: string;        // YYYY-MM-DD
+  endDate: string;          // YYYY-MM-DD
   referenceNo: string;
   status: RentalStatus;
 }
@@ -40,6 +40,10 @@ interface Props {
   rangeError?: string;
   /** Whether availability data is loading */
   isLoading?: boolean;
+  /** Optional: error message if availability retrieval from database failed */
+  fetchError?: string;
+  /** Optional: callback when calendar month changes */
+  onMonthChange?: (year: number, month: number) => void;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -78,12 +82,9 @@ function rangeIncludes(ymd: string, ranges: BookedRange[], status?: RentalStatus
 }
 
 function rangeOverlapsSelection(startYMD: string, endYMD: string, ranges: BookedRange[]): boolean {
-  const s = parseYMD(startYMD).getTime();
-  const e = parseYMD(endYMD).getTime();
   return ranges.some(r => {
-    const rs = parseYMD(r.startDate).getTime();
-    const re = parseYMD(r.endDate).getTime();
-    return s <= re && e >= rs;
+    if (!['PENDING_APPROVAL', 'APPROVED', 'CHECKED_OUT'].includes(r.status)) return false;
+    return startYMD <= r.endDate && endYMD >= r.startDate;
   });
 }
 
@@ -97,7 +98,9 @@ export const AvailabilityCalendar: React.FC<Props> = ({
   endDate,
   onChange,
   rangeError,
-  isLoading = false
+  isLoading = false,
+  fetchError,
+  onMonthChange
 }) => {
   const today = todayYMD();
 
@@ -113,12 +116,23 @@ export const AvailabilityCalendar: React.FC<Props> = ({
 
   // Selection state: 'start' = user will pick start next, 'end' = user will pick end next
   const [picking, setPicking] = useState<'start' | 'end'>(startDate ? 'end' : 'start');
+  const [clickExplanation, setClickExplanation] = useState<string>('');
 
   // ── Month Navigation ──────────────────────────────────────────────────────
 
   const prevMonth = () => {
-    if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); }
-    else setViewMonth(m => m - 1);
+    let newYear = viewYear;
+    let newMonth = viewMonth;
+    if (viewMonth === 0) {
+      newMonth = 11;
+      newYear = viewYear - 1;
+      setViewMonth(11);
+      setViewYear(y => y - 1);
+    } else {
+      newMonth = viewMonth - 1;
+      setViewMonth(m => m - 1);
+    }
+    onMonthChange?.(newYear, newMonth);
   };
 
   const canGoNext = useMemo(() => {
@@ -130,8 +144,18 @@ export const AvailabilityCalendar: React.FC<Props> = ({
 
   const nextMonth = () => {
     if (!canGoNext) return;
-    if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); }
-    else setViewMonth(m => m + 1);
+    let newYear = viewYear;
+    let newMonth = viewMonth;
+    if (viewMonth === 11) {
+      newMonth = 0;
+      newYear = viewYear + 1;
+      setViewMonth(0);
+      setViewYear(y => y + 1);
+    } else {
+      newMonth = viewMonth + 1;
+      setViewMonth(m => m + 1);
+    }
+    onMonthChange?.(newYear, newMonth);
   };
 
   // ── Date Status Derivation ────────────────────────────────────────────────
@@ -165,7 +189,29 @@ export const AvailabilityCalendar: React.FC<Props> = ({
   // ── Click Handler ─────────────────────────────────────────────────────────
 
   const handleDayClick = (ymd: string, status: DateStatus) => {
-    if (['past', 'unavailable', 'reserved', 'checked-out'].includes(status)) return;
+    if (fetchError) {
+      setClickExplanation('Availability could not be verified from the database. Date selection is temporarily paused.');
+      return;
+    }
+
+    if (status === 'reserved') {
+      setClickExplanation(`${ymd} is already RESERVED by another customer.`);
+      return;
+    }
+    if (status === 'checked-out') {
+      setClickExplanation(`${ymd} is currently RENTED and checked out.`);
+      return;
+    }
+    if (status === 'unavailable') {
+      setClickExplanation(`${ymd} is UNAVAILABLE due to maintenance.`);
+      return;
+    }
+    if (status === 'past') {
+      setClickExplanation('Past dates cannot be selected.');
+      return;
+    }
+
+    setClickExplanation('');
 
     if (picking === 'start') {
       onChange(ymd, '');
@@ -180,7 +226,7 @@ export const AvailabilityCalendar: React.FC<Props> = ({
       }
       // Check if range crosses any blocked dates
       if (rangeOverlapsSelection(startDate, ymd, bookedRanges)) {
-        // Find first blocked date in the range and restrict
+        setClickExplanation('Your selected rental period overlaps an existing reservation or rental.');
         onChange(startDate, '');
         setPicking('end');
         return;
@@ -193,6 +239,7 @@ export const AvailabilityCalendar: React.FC<Props> = ({
   const handleClear = () => {
     onChange('', '');
     setPicking('start');
+    setClickExplanation('');
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -205,28 +252,28 @@ export const AvailabilityCalendar: React.FC<Props> = ({
 
   // Status-to-style mapping
   const cellStyles: Record<DateStatus, string> = {
-    'available':       'bg-white hover:bg-zinc-100 text-zinc-800 cursor-pointer border border-zinc-100',
+    'available':       'bg-white hover:bg-zinc-50 text-zinc-900 cursor-pointer border border-zinc-200/70',
     'past':            'bg-zinc-50 text-zinc-300 cursor-not-allowed border border-transparent',
     'unavailable':     'bg-zinc-100 text-zinc-400 cursor-not-allowed border border-zinc-200 line-through',
-    'reserved':        'bg-amber-50 text-amber-700 cursor-not-allowed border border-amber-200',
-    'checked-out':     'bg-rose-50 text-rose-600 cursor-not-allowed border border-rose-200',
+    'reserved':        'bg-amber-50 text-amber-900 cursor-not-allowed border border-amber-200/90 font-medium',
+    'checked-out':     'bg-rose-50 text-rose-800 cursor-not-allowed border border-rose-200/90 font-medium',
     'selected-single': 'bg-zinc-900 text-white cursor-pointer border border-zinc-900 font-bold',
     'selected-start':  'bg-zinc-900 text-white cursor-pointer border border-zinc-900 rounded-r-none font-bold',
     'selected-end':    'bg-zinc-900 text-white cursor-pointer border border-zinc-900 rounded-l-none font-bold',
-    'selected-range':  'bg-zinc-200 text-zinc-900 cursor-pointer border border-transparent rounded-none',
+    'selected-range':  'bg-zinc-100 text-zinc-900 cursor-pointer border-t border-b border-zinc-300 rounded-none',
   };
 
   const getAriaLabel = (ymd: string, status: DateStatus): string => {
     const labels: Record<DateStatus, string> = {
-      available: `${ymd}, available`,
-      past: `${ymd}, past date`,
-      unavailable: `${ymd}, camera unavailable`,
-      reserved: `${ymd}, already reserved`,
-      'checked-out': `${ymd}, camera checked out`,
-      'selected-start': `${ymd}, selected start date`,
-      'selected-end': `${ymd}, selected end date`,
-      'selected-range': `${ymd}, within selected range`,
-      'selected-single': `${ymd}, selected date`,
+      available: `${ymd} — Available for rental`,
+      past: `${ymd} — Past date`,
+      unavailable: `${ymd} — Camera unavailable (maintenance)`,
+      reserved: `${ymd} — RESERVED by another customer`,
+      'checked-out': `${ymd} — RENTED (currently checked out)`,
+      'selected-start': `${ymd} — Selected pickup date`,
+      'selected-end': `${ymd} — Selected return date`,
+      'selected-range': `${ymd} — Within selected rental period`,
+      'selected-single': `${ymd} — Selected date`,
     };
     return labels[status];
   };
@@ -242,17 +289,43 @@ export const AvailabilityCalendar: React.FC<Props> = ({
     <div className="space-y-3">
       {/* Camera unavailable banner */}
       {cameraUnavailable && (
-        <div className="p-3 bg-zinc-100 border border-zinc-300 rounded-lg text-xs text-zinc-600 flex items-start gap-2">
-          <span className="text-lg leading-none">🔒</span>
+        <div className="p-3 bg-white border border-zinc-200 rounded-lg text-xs text-zinc-700 flex items-start gap-2 shadow-xs">
+          <AlertCircle className="w-4 h-4 text-zinc-500 shrink-0 mt-0.5" />
           <span>{cameraUnavailableReason || 'This camera is currently unavailable for rental.'}</span>
         </div>
       )}
 
-      {/* Loading overlay */}
+      {/* Loading indicator */}
       {isLoading && (
-        <div className="p-2 bg-zinc-50 border border-zinc-200 rounded-lg text-xs text-zinc-500 flex items-center gap-2">
+        <div className="p-2 bg-white border border-zinc-200 rounded-lg text-xs text-zinc-500 flex items-center gap-2 shadow-xs">
           <span className="animate-pulse">⏳</span>
-          <span>Checking availability…</span>
+          <span>Verifying real-time database availability…</span>
+        </div>
+      )}
+
+      {/* Database fetch error warning */}
+      {fetchError && (
+        <div className="p-2.5 bg-white border border-zinc-200 rounded-lg text-[11px] text-zinc-700 flex items-start gap-2 shadow-xs">
+          <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+          <span>{fetchError}</span>
+        </div>
+      )}
+
+      {/* Explanatory status hint when clicking a disabled date */}
+      {clickExplanation && (
+        <div className="p-2.5 bg-white border border-zinc-200 rounded-lg text-[11px] text-zinc-700 flex items-center justify-between shadow-xs">
+          <span className="flex items-center gap-2">
+            <Info className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+            <span>{clickExplanation}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setClickExplanation('')}
+            className="text-zinc-400 hover:text-zinc-600 p-0.5 rounded cursor-pointer"
+            aria-label="Dismiss message"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
@@ -304,7 +377,7 @@ export const AvailabilityCalendar: React.FC<Props> = ({
             const ymd = toYMD(day);
             const status = getDateStatus(ymd);
             const dayNum = day.getDate();
-            const isDisabled = ['past', 'unavailable', 'reserved', 'checked-out'].includes(status);
+            const isDisabled = ['past', 'unavailable', 'reserved', 'checked-out'].includes(status) || Boolean(fetchError);
 
             return (
               <button
@@ -315,6 +388,7 @@ export const AvailabilityCalendar: React.FC<Props> = ({
                 disabled={isDisabled}
                 onClick={() => handleDayClick(ymd, status)}
                 aria-label={getAriaLabel(ymd, status)}
+                title={getAriaLabel(ymd, status)}
                 aria-pressed={['selected-start', 'selected-end', 'selected-single'].includes(status)}
                 className={`
                   relative text-[11px] font-medium h-8 w-full rounded-lg
@@ -346,8 +420,8 @@ export const AvailabilityCalendar: React.FC<Props> = ({
 
       {/* Range error */}
       {rangeError && (
-        <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-[11px] text-rose-700 flex items-start gap-1.5">
-          <span>⚠️</span>
+        <div className="p-2.5 bg-white border border-zinc-200 rounded-lg text-[11px] text-zinc-700 flex items-start gap-2 shadow-xs">
+          <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
           <span>{rangeError}</span>
         </div>
       )}
@@ -357,7 +431,7 @@ export const AvailabilityCalendar: React.FC<Props> = ({
         <button
           type="button"
           onClick={handleClear}
-          className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-800 transition"
+          className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-800 transition cursor-pointer"
         >
           <X className="w-3 h-3" />
           <span>Clear selected dates</span>
@@ -375,8 +449,8 @@ export const AvailabilityCalendar: React.FC<Props> = ({
           Reserved
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded bg-rose-100 border border-rose-200 inline-block" />
-          Checked Out
+          <span className="w-3 h-3 rounded bg-rose-100 border border-rose-300 inline-block" />
+          Rented
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-3 h-3 rounded bg-zinc-100 border border-zinc-200 inline-block" />
@@ -387,10 +461,11 @@ export const AvailabilityCalendar: React.FC<Props> = ({
           Selected
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded bg-zinc-200 inline-block" />
+          <span className="w-3 h-3 rounded bg-zinc-100 border border-zinc-300 inline-block" />
           In Range
         </span>
       </div>
+
     </div>
   );
 };

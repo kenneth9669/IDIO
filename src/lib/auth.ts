@@ -1,6 +1,7 @@
 import { createClient } from './supabase/server';
 import { ProfileRow, UserRole } from '../types/database';
 import { currentUser } from '@clerk/nextjs/server';
+import { syncCurrentClerkUser, deriveDeterministicUuid } from './clerkSync';
 
 export interface AuthenticatedContext {
   user: {
@@ -54,18 +55,42 @@ export async function getAuthenticatedUser(): Promise<AuthenticatedContext | nul
     const clerkUser = await currentUser();
     if (clerkUser) {
       const email = clerkUser.emailAddresses?.[0]?.emailAddress || '';
-      const { data: profile } = await supabase
+      let { data: profile } = await supabase
         .from('profiles')
         .select('*')
         .or(`clerk_id.eq.${clerkUser.id},email.eq.${email}`)
         .maybeSingle();
 
-      const role: UserRole =
-        (profile?.role as UserRole) ||
-        ((clerkUser.publicMetadata?.role as UserRole) === 'ADMIN' ? 'ADMIN' : 'CUSTOMER');
+      // If still no profile in database, attempt to sync/create customer profile
+      if (!profile) {
+        profile = await syncCurrentClerkUser();
+      }
+
+      // Security Invariant (SEC-01/02): Role MUST come strictly from verified database profile.
+      // Missing, unlinked, or uncreated profiles fail closed to 'CUSTOMER'.
+      // An incoming Clerk user is NEVER elevated to ADMIN based on Clerk metadata or unlinked email matching.
+      let role: UserRole = 'CUSTOMER';
+      if (profile && profile.role === 'ADMIN') {
+        if (profile.clerk_id === clerkUser.id) {
+          role = 'ADMIN';
+        } else {
+          console.warn(
+            `[Security Alert: SEC-01/02] Clerk user (${clerkUser.id}) attempted to access ADMIN profile (${email}) without verified clerk_id binding. Failing closed to CUSTOMER.`
+          );
+          role = 'CUSTOMER';
+        }
+      } else if (profile && profile.role === 'CUSTOMER') {
+        role = 'CUSTOMER';
+      } else {
+        role = 'CUSTOMER';
+      }
+
+      // Invariant (SEC-02): Resolved profile id MUST ALWAYS be a valid UUID format
+      // to maintain foreign key integrity across all relational tables.
+      const resolvedProfileId = profile?.id || deriveDeterministicUuid(clerkUser.id);
 
       const resolvedProfile: ProfileRow = (profile as ProfileRow) || {
-        id: clerkUser.id,
+        id: resolvedProfileId,
         clerk_id: clerkUser.id,
         role,
         full_name:

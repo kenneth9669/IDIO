@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { AuthProvider } from '../context/AuthContext';
+import { FeedbackProvider } from '../context/FeedbackContext';
 import { ClerkProvider } from '@clerk/nextjs';
 
 export const metadata: Metadata = {
@@ -26,7 +27,9 @@ export default function RootLayout({
         </head>
         <body className="bg-zinc-50/50 text-zinc-900 antialiased selection:bg-zinc-900 selection:text-white">
           <AuthProvider>
-            {children}
+            <FeedbackProvider>
+              {children}
+            </FeedbackProvider>
           </AuthProvider>
         </body>
       </html>

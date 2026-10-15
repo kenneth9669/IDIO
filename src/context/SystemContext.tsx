@@ -12,8 +12,7 @@ import {
   CameraStatus,
   CameraCondition,
   PaymentStatus,
-  PaymentMethod,
-  DepositStatus
+  PaymentMethod
 } from '../types';
 import {
   SEED_USERS,
@@ -24,15 +23,7 @@ import {
 } from '../data/seedData';
 import {
   OperationResult,
-  validateRole,
-  serviceCreateReservation,
-  serviceApproveReservation,
-  serviceRejectReservation,
-  serviceCancelReservation,
-  serviceCheckoutRental,
-  serviceReturnInspectionRental,
-  serviceAddCamera,
-  serviceDeleteCamera
+  validateRole
 } from '../lib/domainService';
 
 import {
@@ -62,6 +53,7 @@ import {
   refundPaymentAction,
   settleDepositAction
 } from '../app/actions/paymentActions';
+import { CURRENT_AGREEMENT_VERSION } from '../data/rentalAgreement';
 import { useAuth } from './AuthContext';
 
 interface SystemContextType {
@@ -86,6 +78,8 @@ interface SystemContextType {
     purpose: string;
     paymentMethod: PaymentMethod;
     paymentReference?: string;
+    agreementAccepted?: boolean;
+    agreementVersion?: string;
   }) => Promise<OperationResult<Reservation>>;
   approveReservation: (id: string) => Promise<OperationResult<Reservation>>;
   rejectReservation: (id: string, reason: string) => Promise<OperationResult<Reservation>>;
@@ -167,18 +161,32 @@ export const SystemProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, []);
 
   // Authoritative Reservation Data from Supabase database (public.reservations)
-  const [reservations, setReservations] = useState<Reservation[]>(SEED_RESERVATIONS);
+  const [reservations, setReservations] = useState<Reservation[]>(() => {
+    // Only Admin in dev/offline mode uses seed reservations; Customers & guests start completely clean
+    return currentRole === 'ADMIN' ? SEED_RESERVATIONS : [];
+  });
 
   useEffect(() => {
     let isMounted = true;
     async function loadReservations() {
+      // Unauthenticated customer/guest: enforce clean empty list
+      if (currentRole === 'CUSTOMER' && !authProfile?.id) {
+        if (isMounted) setReservations([]);
+        return;
+      }
       try {
         const res = await fetchReservationsAction();
-        if (isMounted && res.success && res.data && res.data.length > 0) {
+        if (isMounted && res.success && Array.isArray(res.data)) {
           setReservations(res.data);
+        } else if (isMounted && currentRole === 'CUSTOMER') {
+          // Clean empty list for customer with 0 bookings or when unauthorized
+          setReservations([]);
         }
       } catch (e) {
-        // Fallback to seed data in dev/offline mode
+        // Fallback: keep customer clean with empty list
+        if (isMounted && currentRole === 'CUSTOMER') {
+          setReservations([]);
+        }
       }
     }
     loadReservations();
@@ -187,19 +195,46 @@ export const SystemProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   }, [authProfile?.id, currentRole]);
 
+  // Synchronize reservation status with live camera status if camera is already checked out
+  useEffect(() => {
+    if (cameras.length === 0) return;
+    setReservations(prev => {
+      let changed = false;
+      const next = prev.map(r => {
+        if (r.status === 'APPROVED') {
+          const cam = cameras.find(c => c.id === r.cameraId);
+          if (cam?.status === 'CHECKED_OUT') {
+            changed = true;
+            return { ...r, status: 'CHECKED_OUT' as const };
+          }
+        }
+        return r;
+      });
+      return changed ? next : prev;
+    });
+  }, [cameras]);
+
   // Authoritative Rental Data from Supabase database (public.rentals)
   const [rentals, setRentals] = useState<Rental[]>([]);
 
   useEffect(() => {
     let isMounted = true;
     async function loadRentals() {
+      if (currentRole === 'CUSTOMER' && !authProfile?.id) {
+        if (isMounted) setRentals([]);
+        return;
+      }
       try {
         const res = await fetchRentalsAction();
-        if (isMounted && res.success && res.data) {
+        if (isMounted && res.success && Array.isArray(res.data)) {
           setRentals(res.data);
+        } else if (isMounted && currentRole === 'CUSTOMER') {
+          setRentals([]);
         }
       } catch (e) {
-        // Fallback to empty in dev/offline mode
+        if (isMounted && currentRole === 'CUSTOMER') {
+          setRentals([]);
+        }
       }
     }
     loadRentals();
@@ -214,13 +249,21 @@ export const SystemProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => {
     let isMounted = true;
     async function loadPayments() {
+      if (currentRole === 'CUSTOMER' && !authProfile?.id) {
+        if (isMounted) setPayments([]);
+        return;
+      }
       try {
         const res = await fetchPaymentsAction();
-        if (isMounted && res.success && res.data) {
+        if (isMounted && res.success && Array.isArray(res.data)) {
           setPayments(res.data);
+        } else if (isMounted && currentRole === 'CUSTOMER') {
+          setPayments([]);
         }
       } catch (e) {
-        // Fallback to empty in dev/offline mode
+        if (isMounted && currentRole === 'CUSTOMER') {
+          setPayments([]);
+        }
       }
     }
     loadPayments();
@@ -228,8 +271,6 @@ export const SystemProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       isMounted = false;
     };
   }, [authProfile?.id, currentRole]);
-
-
 
   const [maintenanceLogs, setMaintenanceLogs] = useState<MaintenanceLog[]>(() => {
     if (typeof window === 'undefined') return SEED_MAINTENANCE;
@@ -261,8 +302,25 @@ export const SystemProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [activityLogs]);
 
+  // Clean guest user representation for visitors who have not signed in yet
+  const guestCustomer: User = {
+    id: '',
+    name: 'Guest User',
+    email: '',
+    phone: '',
+    role: 'CUSTOMER',
+    avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=256&q=80',
+    barangay: 'Libertad',
+    streetAddress: '',
+    city: 'Butuan City',
+    province: 'Agusan del Norte',
+    idType: 'Philippine National ID',
+    idNumber: ''
+  };
+
+  const adminBaseUser = users.find(u => u.role === 'ADMIN') || users[0];
+
   // Active authenticated user derived from real profile or role mapping
-  const baseUser = users.find(u => u.role === currentRole) || users[0];
   const currentUser: User = authProfile
     ? {
         id: authProfile.id,
@@ -270,7 +328,7 @@ export const SystemProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         email: authProfile.email,
         phone: authProfile.phone,
         role: authProfile.role as UserRole,
-        avatarUrl: authProfile.avatar_url || baseUser.avatarUrl,
+        avatarUrl: authProfile.avatar_url || adminBaseUser.avatarUrl,
         barangay: authProfile.barangay,
         streetAddress: authProfile.street_address,
         city: authProfile.city,
@@ -278,7 +336,9 @@ export const SystemProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         idType: authProfile.id_type,
         idNumber: authProfile.id_number
       }
-    : baseUser;
+    : currentRole === 'ADMIN'
+      ? adminBaseUser
+      : guestCustomer;
 
   const logActivity = (action: string, details: string, targetType: ActivityLog['targetType'], targetId: string) => {
     const newLog: ActivityLog = {
@@ -416,6 +476,8 @@ export const SystemProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     purpose: string;
     paymentMethod: PaymentMethod;
     paymentReference?: string;
+    agreementAccepted?: boolean;
+    agreementVersion?: string;
   }): Promise<OperationResult<Reservation>> => {
     try {
       const res = await createReservationAction({
@@ -424,8 +486,11 @@ export const SystemProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         endDate: data.endDate,
         purpose: data.purpose,
         paymentMethod: data.paymentMethod,
-        paymentReference: data.paymentReference
+        paymentReference: data.paymentReference,
+        agreementAccepted: data.agreementAccepted ?? true,
+        agreementVersion: data.agreementVersion ?? CURRENT_AGREEMENT_VERSION
       });
+
 
       if (!res.success || !res.data) {
         return { success: false, message: res.message || 'Failed to create reservation.' };
@@ -852,7 +917,7 @@ export const SystemProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
     setUsers(SEED_USERS);
     setCameras(SEED_CAMERAS);
-    setReservations(SEED_RESERVATIONS);
+    setReservations(currentRole === 'ADMIN' ? SEED_RESERVATIONS : []);
     setRentals([]);
     setPayments([]);
     setMaintenanceLogs(SEED_MAINTENANCE);

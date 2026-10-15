@@ -3,10 +3,13 @@ import React, { useState, useMemo } from 'react';
 import { DigitalCamera, PaymentMethod } from '../../types';
 import { useSystem } from '../../context/SystemContext';
 import { Dialog } from '../common/Dialog';
-import { formatPHP, formatDate, calculateRentalDays, getCameraImageUrl } from '../../lib/utils';
+import { formatPHP, formatDate, calculateRentalDays, getCameraImageUrl, addDays } from '../../lib/utils';
 import { checkCameraAvailability, getBookedDateRanges } from '../../lib/availabilityEngine';
-import { AvailabilityCalendar } from './AvailabilityCalendar';
-import confetti from 'canvas-confetti';
+import { CURRENT_AGREEMENT_VERSION, CURRENT_AGREEMENT_TITLE, CANONICAL_AGREEMENT_SECTIONS } from '../../data/rentalAgreement';
+import { AvailabilityCalendar, BookedRange } from './AvailabilityCalendar';
+import { fetchCameraAvailabilityScheduleAction } from '../../app/actions/reservationActions';
+import { createClient as createBrowserSupabaseClient } from '../../lib/supabase/client';
+import { ReservationSuccessModal, ConfirmedReservationData } from './ReservationSuccessModal';
 import {
   CalendarDays,
   ShieldCheck,
@@ -16,8 +19,9 @@ import {
   CheckCircle2,
   Camera,
   QrCode,
-  Sparkles,
-  ArrowRight
+  ArrowRight,
+  FileText,
+  Clock
 } from 'lucide-react';
 
 interface ReservationModalProps {
@@ -41,15 +45,119 @@ export const ReservationModal: React.FC<ReservationModalProps> = ({
   const [purpose, setPurpose] = useState('Personal photography / event documentation in Butuan City');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH_PICKUP');
   const [paymentReference, setPaymentReference] = useState('CASH-ON-PICKUP');
-  const [agreedToTerms, setAgreedToTerms] = useState(true);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [confirmedReservation, setConfirmedReservation] = useState<ConfirmedReservationData | null>(null);
+
+  // Shared database-backed booked ranges
+  const [sharedBookedRanges, setSharedBookedRanges] = useState<BookedRange[]>([]);
+  const [isLoadingAvailability, setIsLoadingAvailability] = useState(false);
+  const [availabilityFetchError, setAvailabilityFetchError] = useState<string | null>(null);
+
+  // Fetch shared database availability schedule
+  const loadDatabaseAvailability = React.useCallback(async () => {
+    if (!camera?.id) return;
+    setIsLoadingAvailability(true);
+    try {
+      const res = await fetchCameraAvailabilityScheduleAction(camera.id);
+      if (res.success && Array.isArray(res.data)) {
+        setSharedBookedRanges(res.data);
+        setAvailabilityFetchError(null);
+      } else {
+        setAvailabilityFetchError(res.message || 'Unable to verify real-time availability from database.');
+      }
+    } catch (err: any) {
+      setAvailabilityFetchError(err.message || 'Failed to verify camera availability.');
+    } finally {
+      setIsLoadingAvailability(false);
+    }
+  }, [camera?.id]);
+
+  // Load availability on modal open and subscribe to live changes via Realtime
+  React.useEffect(() => {
+    if (!isOpen || !camera?.id) return;
+
+    loadDatabaseAvailability();
+
+    try {
+      const supabase = createBrowserSupabaseClient();
+      const channel = supabase
+        .channel(`camera_avail_${camera.id}_${Date.now()}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'reservations', filter: `camera_id=eq.${camera.id}` },
+          () => {
+            loadDatabaseAvailability();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'rentals', filter: `camera_id=eq.${camera.id}` },
+          () => {
+            loadDatabaseAvailability();
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } catch {
+      // Graceful fallback when browser client cannot connect to websocket
+    }
+  }, [isOpen, camera?.id, loadDatabaseAvailability]);
+
+  // Effective reservations combining shared database records with active state
+  const effectiveReservations = useMemo(() => {
+    if (!camera) return [];
+
+    const dbReservations: any[] = sharedBookedRanges.map((r, i) => ({
+      id: `db-booked-${i}`,
+      referenceNo: r.referenceNo || 'RESERVED',
+      customerId: 'db-customer',
+      customerName: 'Customer',
+      customerEmail: '',
+      customerPhone: '',
+      customerBarangay: '',
+      idType: '',
+      idNumber: '',
+      cameraId: camera.id,
+      cameraName: camera.name,
+      cameraBrand: camera.brand,
+      cameraSerial: camera.serialNumber,
+      cameraImageUrl: camera.imageUrl,
+      startDate: r.startDate,
+      endDate: r.endDate,
+      totalDays: 1,
+      dailyRate: camera.dailyRate,
+      subtotal: camera.dailyRate,
+      securityDeposit: camera.securityDeposit,
+      totalAmount: camera.dailyRate + camera.securityDeposit,
+      purpose: 'Active booking',
+      status: r.status,
+      paymentStatus: 'PAID' as const,
+      paymentMethod: 'CASH_PICKUP' as const,
+      depositStatus: 'HELD' as const,
+      createdAt: '',
+      updatedAt: ''
+    }));
+
+    const localReservations = reservations.filter(r => r.cameraId === camera.id);
+    const combined = [...dbReservations];
+    for (const l of localReservations) {
+      if (!combined.some(c => c.startDate === l.startDate && c.endDate === l.endDate)) {
+        combined.push(l);
+      }
+    }
+    return combined;
+  }, [camera, sharedBookedRanges, reservations]);
 
   // Booked ranges for this camera (used by the calendar)
-  const bookedRanges = useMemo(() => {
+  const effectiveBookedRanges = useMemo(() => {
     if (!camera) return [];
-    return getBookedDateRanges(camera.id, reservations);
-  }, [camera, reservations]);
+    return getBookedDateRanges(camera.id, effectiveReservations);
+  }, [camera, effectiveReservations]);
 
   // Is the camera globally unavailable regardless of dates?
   const cameraGloballyUnavailable = camera
@@ -68,8 +176,8 @@ export const ReservationModal: React.FC<ReservationModalProps> = ({
   const availability = useMemo(() => {
     if (!camera) return { isAvailable: false, reason: 'No camera selected.' };
     if (!startDate || !endDate) return { isAvailable: false, reason: '' };
-    return checkCameraAvailability(camera, startDate, endDate, reservations);
-  }, [camera, startDate, endDate, reservations]);
+    return checkCameraAvailability(camera, startDate, endDate, effectiveReservations);
+  }, [camera, startDate, endDate, effectiveReservations]);
 
   if (!camera) return null;
 
@@ -89,8 +197,8 @@ export const ReservationModal: React.FC<ReservationModalProps> = ({
     }
 
     if (newStart && newEnd) {
-      // Validate immediately
-      const check = checkCameraAvailability(camera, newStart, newEnd, reservations);
+      // Validate immediately against shared database reservations
+      const check = checkCameraAvailability(camera, newStart, newEnd, effectiveReservations);
       if (!check.isAvailable && check.reason) {
         setRangeError(check.reason);
         setStartDate(newStart);
@@ -101,6 +209,23 @@ export const ReservationModal: React.FC<ReservationModalProps> = ({
 
     setStartDate(newStart);
     setEndDate(newEnd);
+  };
+
+  const handleClose = () => {
+    setConfirmedReservation(null);
+    onClose();
+  };
+
+  const handleViewReservations = () => {
+    const refNo = confirmedReservation?.referenceNo || '';
+    setConfirmedReservation(null);
+    onSuccess(refNo);
+    onClose();
+  };
+
+  const handleContinueBrowsing = () => {
+    setConfirmedReservation(null);
+    onClose();
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -122,8 +247,8 @@ export const ReservationModal: React.FC<ReservationModalProps> = ({
       return;
     }
 
-    if (paymentMethod === 'GCASH' && !paymentReference.trim()) {
-      setErrorMessage('Please provide your GCash Reference Number or transaction ID.');
+    if (!agreedToTerms) {
+      setErrorMessage('You must review and explicitly accept the Customer Rental Agreement before submitting your reservation.');
       return;
     }
 
@@ -135,32 +260,54 @@ export const ReservationModal: React.FC<ReservationModalProps> = ({
         startDate,
         endDate,
         purpose,
-        paymentMethod,
-        paymentReference: paymentMethod === 'GCASH' ? paymentReference : undefined
+        paymentMethod: 'CASH_PICKUP',
+        paymentReference: undefined,
+        agreementAccepted: true,
+        agreementVersion: CURRENT_AGREEMENT_VERSION
       });
 
       setIsSubmitting(false);
 
       if (result.success && result.data) {
-        try {
-          confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
-        } catch { /* confetti fallback */ }
-
-        onSuccess(result.data.referenceNo);
-        onClose();
+        // Confetti effect completely removed per design requirement
+        setConfirmedReservation({
+          referenceNo: result.data.referenceNo,
+          cameraName: result.data.cameraName || camera.name,
+          cameraModel: camera.model,
+          startDate: result.data.startDate,
+          endDate: result.data.endDate
+        });
       } else {
         setErrorMessage(result.message);
+        // Refresh availability schedule immediately upon booking conflict
+        await loadDatabaseAvailability();
       }
     } catch (err: any) {
       setIsSubmitting(false);
       setErrorMessage(err.message || 'Error processing reservation.');
+      await loadDatabaseAvailability();
     }
   };
 
+  // If reservation is confirmed, present the clean minimalist white success modal
+  if (confirmedReservation) {
+    return (
+      <ReservationSuccessModal
+        isOpen={true}
+        onClose={handleClose}
+        reservation={confirmedReservation}
+        onViewReservations={handleViewReservations}
+        onContinueBrowsing={handleContinueBrowsing}
+      />
+    );
+  }
+
   const canSubmit =
+    !!currentUser.id &&
     !!startDate &&
     !!endDate &&
     availability.isAvailable &&
+    !availabilityFetchError &&
     agreedToTerms &&
     !isSubmitting &&
     !cameraGloballyUnavailable;
@@ -168,7 +315,7 @@ export const ReservationModal: React.FC<ReservationModalProps> = ({
   return (
     <Dialog
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={handleClose}
       title={
         <div className="flex items-center gap-2">
           <Camera className="w-5 h-5 text-zinc-900" />
@@ -180,9 +327,12 @@ export const ReservationModal: React.FC<ReservationModalProps> = ({
     >
       <form onSubmit={handleSubmit} className="space-y-5 text-xs text-zinc-900">
         {errorMessage && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-            <span>{errorMessage}</span>
+          <div className="p-3.5 bg-white border border-zinc-200 rounded-xl text-zinc-800 text-xs flex items-start gap-2.5 shadow-xs">
+            <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5 stroke-[2]" />
+            <div className="flex-1">
+              <span className="font-semibold text-zinc-900 block mb-0.5">Reservation Unsuccessful</span>
+              <span className="text-zinc-600 leading-relaxed">{errorMessage}</span>
+            </div>
           </div>
         )}
 
@@ -217,23 +367,50 @@ export const ReservationModal: React.FC<ReservationModalProps> = ({
           <AvailabilityCalendar
             cameraUnavailable={cameraGloballyUnavailable}
             cameraUnavailableReason={cameraUnavailableReason}
-            bookedRanges={bookedRanges}
+            bookedRanges={effectiveBookedRanges}
             startDate={startDate}
             endDate={endDate}
             onChange={handleDateChange}
             rangeError={rangeError}
+            isLoading={isLoadingAvailability}
+            fetchError={availabilityFetchError || undefined}
+            onMonthChange={() => loadDatabaseAvailability()}
           />
 
-          {/* Selected date range summary */}
+          {/* Contextual Availability & Selected Rental Period */}
           {startDate && endDate && availability.isAvailable && (
-            <div className="flex items-center gap-2 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-700">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>
-                <strong>{formatDate(startDate)}</strong>
-                <ArrowRight className="w-3 h-3 inline mx-1" />
-                <strong>{formatDate(endDate)}</strong>
-                {' '}— <strong>{totalDays} day{totalDays !== 1 ? 's' : ''}</strong> rental
-              </span>
+            <div className="space-y-2 p-3.5 bg-white border border-zinc-200 rounded-xl shadow-2xs">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-zinc-900 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  Available for your selected dates
+                </span>
+                <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 border border-zinc-200">
+                  {totalDays} Day{totalDays !== 1 ? 's' : ''} Rental
+                </span>
+              </div>
+              <div className="p-2.5 bg-zinc-50 rounded-lg border border-zinc-200 text-[11px] flex items-center justify-between">
+                <div>
+                  <span className="text-zinc-500 block text-[10px]">Rental Schedule</span>
+                  <span className="font-semibold text-zinc-900">{formatDate(startDate)} → {formatDate(endDate)}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-zinc-500 block text-[10px]">Agreed Return</span>
+                  <span className="text-zinc-800 font-medium">By 6:00 PM on {formatDate(endDate)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {startDate && endDate && !availability.isAvailable && (
+            <div className="p-3.5 bg-white border border-zinc-200 rounded-xl text-xs flex items-start gap-2.5 shadow-2xs">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <p className="font-semibold text-zinc-900">Dates Unavailable</p>
+                <p className="text-zinc-600 text-[11px] leading-relaxed">
+                  {availability.reason || 'This camera is unavailable for your selected dates.'}
+                </p>
+              </div>
             </div>
           )}
 
@@ -246,25 +423,52 @@ export const ReservationModal: React.FC<ReservationModalProps> = ({
           )}
         </div>
 
+
         {/* Customer Location & ID Verification */}
-        <div className="p-3.5 bg-zinc-50 border border-zinc-200 rounded-xl space-y-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-zinc-700 flex items-center gap-1.5">
-              <MapPin className="w-3.5 h-3.5 text-zinc-600" />
-              Customer Verification Details
-            </span>
-            <span className="text-[11px] text-zinc-500">Butuan Resident Profile</span>
+        {!currentUser.id ? (
+          <div className="p-3.5 bg-white border border-zinc-200 rounded-xl space-y-2 shadow-2xs">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-zinc-900 flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                Sign In Required to Complete Reservation
+              </span>
+              <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 border border-zinc-200">
+                Guest Mode
+              </span>
+            </div>
+            <p className="text-xs text-zinc-600 leading-relaxed">
+              You must have a verified customer account with a Butuan City resident profile to reserve digital camera equipment.
+            </p>
+            <div className="pt-1">
+              <a
+                href="/login"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg text-xs font-semibold transition"
+              >
+                <span>Sign In to Continue</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </a>
+            </div>
           </div>
-          <p className="text-xs text-zinc-800">
-            <strong>{currentUser.name}</strong> • {currentUser.phone}
-          </p>
-          <p className="text-xs text-zinc-600">
-            Address: {currentUser.streetAddress}, Brgy. {currentUser.barangay}, {currentUser.city}, {currentUser.province}
-          </p>
-          <p className="text-[11px] text-zinc-500">
-            ID Record: {currentUser.idType} ({currentUser.idNumber})
-          </p>
-        </div>
+        ) : (
+          <div className="p-3.5 bg-zinc-50 border border-zinc-200 rounded-xl space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-zinc-700 flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5 text-zinc-600" />
+                Customer Verification Details
+              </span>
+              <span className="text-[11px] text-zinc-500">Butuan Resident Profile</span>
+            </div>
+            <p className="text-xs text-zinc-800">
+              <strong>{currentUser.name}</strong> • {currentUser.phone || 'No phone recorded'}
+            </p>
+            <p className="text-xs text-zinc-600">
+              Address: {currentUser.streetAddress || 'Purok / Street not set'}, Brgy. {currentUser.barangay || 'Libertad'}, {currentUser.city}, {currentUser.province}
+            </p>
+            <p className="text-[11px] text-zinc-500">
+              ID Record: {currentUser.idType || 'Government ID'} ({currentUser.idNumber || 'Pending verification'})
+            </p>
+          </div>
+        )}
 
         {/* Purpose */}
         <div>
@@ -337,24 +541,64 @@ export const ReservationModal: React.FC<ReservationModalProps> = ({
           </p>
         </div>
 
-        {/* Terms checkbox */}
-        <label className="flex items-start gap-2 cursor-pointer text-xs text-zinc-600">
-          <input
-            type="checkbox"
-            checked={agreedToTerms}
-            onChange={(e) => setAgreedToTerms(e.target.checked)}
-            className="mt-0.5 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
-          />
-          <span>
-            I agree to present a valid Philippine ID and complete the physical inspection at IDIO Hub (J.C. Aquino Ave, Butuan City) during checkout.
-          </span>
-        </label>
+        {/* Customer Rental Agreement Section */}
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-semibold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5">
+              <FileText className="w-4 h-4 text-zinc-900" />
+              Customer Rental Agreement
+            </label>
+            <span className="text-[10px] font-bold text-zinc-700 bg-zinc-100 border border-zinc-200 px-2 py-0.5 rounded">
+              Version {CURRENT_AGREEMENT_VERSION}
+            </span>
+          </div>
+
+          {/* Scrollable Agreement Text Viewer */}
+          <div className="p-3.5 bg-zinc-50 border border-zinc-200 rounded-xl space-y-3 max-h-48 overflow-y-auto text-xs text-zinc-600 leading-relaxed">
+            <div className="pb-2 border-b border-zinc-200">
+              <h4 className="font-bold text-zinc-900 text-xs">{CURRENT_AGREEMENT_TITLE}</h4>
+              <p className="text-[10px] text-zinc-500">
+                Operating Hub: J.C. Aquino Ave, Butuan City, Agusan del Norte, Philippines
+              </p>
+              <p className="text-[10px] text-zinc-500">
+                Lessee: <strong>{currentUser.name || 'Verified Customer'}</strong> (Brgy. {currentUser.barangay || 'Libertad'}, Butuan City) • Camera: <strong>{camera.name}</strong>
+              </p>
+              {camera.packageIncludes && camera.packageIncludes.length > 0 && (
+                <p className="text-[10px] text-zinc-500 mt-0.5">
+                  Package includes: {camera.packageIncludes.join(', ')}
+                </p>
+              )}
+            </div>
+
+            {CANONICAL_AGREEMENT_SECTIONS.map(section => (
+              <div key={section.id} className="space-y-0.5">
+                <h5 className="font-semibold text-zinc-800 text-[11px]">{section.title}</h5>
+                <p className="text-[11px] text-zinc-600 leading-normal">{section.content}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Agreement Checkbox (Initially Unchecked) */}
+          <label className="flex items-start gap-2.5 p-3 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 transition cursor-pointer text-xs text-zinc-700 shadow-xs">
+            <input
+              type="checkbox"
+              id="rental-agreement-checkbox"
+              checked={agreedToTerms}
+              onChange={(e) => setAgreedToTerms(e.target.checked)}
+              className="mt-0.5 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 cursor-pointer h-4 w-4 shrink-0"
+            />
+            <span className="leading-snug">
+              I have read, understood, and explicitly agree to all terms of the <strong>{CURRENT_AGREEMENT_TITLE} (Version {CURRENT_AGREEMENT_VERSION})</strong>. I confirm my Butuan City residence and agree to present valid Philippine ID at counter checkout.
+            </span>
+          </label>
+        </div>
+
 
         {/* Submit button */}
         <div className="flex justify-end gap-2 pt-2">
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             className="px-4 py-2 rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 text-xs font-semibold transition"
           >
             Cancel
@@ -364,8 +608,8 @@ export const ReservationModal: React.FC<ReservationModalProps> = ({
             disabled={!canSubmit}
             className="px-6 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold shadow-xs transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
-            <Sparkles className="w-4 h-4" />
-            <span>{isSubmitting ? 'Confirming...' : 'Submit Reservation'}</span>
+            <Camera className="w-4 h-4" />
+            <span>{!currentUser.id ? 'Sign In to Reserve' : isSubmitting ? 'Confirming...' : 'Submit Reservation'}</span>
           </button>
         </div>
       </form>

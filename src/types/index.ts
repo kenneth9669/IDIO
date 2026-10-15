@@ -113,9 +113,28 @@ export interface Reservation {
   returnNotes?: string;
   returnTimestamp?: string;
   returnAdminName?: string;
+  bufferEndDate?: string; // YYYY-MM-DD (2 calendar days after agreed return date)
+  agreementVersion?: string;
+  agreementAcceptance?: RentalAgreementAcceptance;
   createdAt: string;
   updatedAt: string;
 }
+
+export interface RentalAgreementAcceptance {
+  id: string;
+  reservationId: string;
+  customerId: string;
+  agreementId: string;
+  version: string;
+  agreementVersion?: string; // convenient alias
+  agreementTitle: string;
+  agreementTextSnapshot: string;
+  agreementHash: string;
+  acceptedAt: string;
+  customerName?: string;
+  customerEmail?: string;
+}
+
 
 export interface MaintenanceLog {
   id: string;

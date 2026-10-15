@@ -27,29 +27,32 @@ function AppContent() {
       <Header activeTab={activeTab} setActiveTab={setActiveTab} />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {(activeTab === 'home' || activeTab === 'dashboard') && (
+      {(activeTab === 'home' || activeTab === 'dashboard') ? (
+        <main className="flex-1 w-full">
           <CustomerHome onNavigateTab={(tab) => setActiveTab(tab)} />
-        )}
-        {activeTab === 'catalog' && (
-          <CustomerCatalog onReservationComplete={() => setActiveTab('my-reservations')} />
-        )}
-        {activeTab === 'my-reservations' && <CustomerBookings />}
-        {(activeTab === 'rentals-payments' || activeTab === 'my-rentals' || activeTab === 'payments' || activeTab === 'deposits') && (
-          <CustomerRentalsAndPayments
-            initialSubTab={activeTab === 'payments' ? 'payments' : activeTab === 'deposits' ? 'deposits' : 'rentals'}
-          />
-        )}
-        {(activeTab === 'account' || activeTab === 'profile' || activeTab === 'notifications') && (
-          <CustomerAccount
-            initialSubTab={activeTab === 'notifications' ? 'notifications' : 'profile'}
-            onNavigateTab={(tab) => setActiveTab(tab)}
-          />
-        )}
-      </main>
+        </main>
+      ) : (
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          {activeTab === 'catalog' && (
+            <CustomerCatalog onReservationComplete={() => setActiveTab('my-reservations')} />
+          )}
+          {activeTab === 'my-reservations' && <CustomerBookings />}
+          {(activeTab === 'rentals-payments' || activeTab === 'my-rentals' || activeTab === 'payments' || activeTab === 'deposits') && (
+            <CustomerRentalsAndPayments
+              initialSubTab={activeTab === 'payments' ? 'payments' : activeTab === 'deposits' ? 'deposits' : 'rentals'}
+            />
+          )}
+          {(activeTab === 'account' || activeTab === 'profile' || activeTab === 'notifications') && (
+            <CustomerAccount
+              initialSubTab={activeTab === 'notifications' ? 'notifications' : 'profile'}
+              onNavigateTab={(tab) => setActiveTab(tab)}
+            />
+          )}
+        </main>
+      )}
 
       {/* Footer */}
-      <Footer />
+      <Footer onNavigateTab={(tab) => setActiveTab(tab)} />
     </div>
   );
 }

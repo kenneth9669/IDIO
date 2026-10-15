@@ -1,17 +1,17 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, useTransition } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { createClient } from '../lib/supabase/client';
 import { ProfileRow, UserRole } from '../types/database';
-import { signInAction, signUpCustomerAction, signOutAction } from '../app/actions/authActions';
+import { signInAction, signUpCustomerAction, signOutAction, AuthActionResult } from '../app/actions/authActions';
 
 interface AuthContextType {
   user: { id: string; email?: string } | null;
   profile: ProfileRow | null;
   role: UserRole | null;
   isLoading: boolean;
-  signIn: (formData: { email: string; password: string }) => Promise<{ success: boolean; message: string }>;
-  signUp: (formData: any) => Promise<{ success: boolean; message: string }>;
+  signIn: (formData: { email: string; password: string }) => Promise<AuthActionResult>;
+  signUp: (formData: any) => Promise<AuthActionResult>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
@@ -23,7 +23,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<ProfileRow | null>(null);
   const [role, setRole] = useState<UserRole | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [, startTransition] = useTransition();
 
   const supabase = createClient();
 

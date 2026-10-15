@@ -202,7 +202,7 @@ describe('4. Server-Enforced Availability & Overlap Prevention', () => {
     // Overlapping: Oct 12 to Oct 14 falls inside Oct 10 to Oct 15
     const avail = checkCameraAvailability(camera, '2026-10-12', '2026-10-14', existingReservations);
     expect(avail.isAvailable).toBe(false);
-    expect(avail.reason).toContain('already reserved/rented');
+    expect(avail.reason).toContain('unavailable for your selected dates');
   });
 
   it('blocks booking when camera is in MAINTENANCE', () => {

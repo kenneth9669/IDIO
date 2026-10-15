@@ -254,7 +254,7 @@ The customer clearly sees:
 5. Refundable security deposit
 6. Total settlement due
 7. Shooting purpose / project details
-8. Payment method choice (GCash reference or Cash on Counter Pickup)
+8. Payment settlement method: Strictly Cash on Counter Pickup (`CASH_PICKUP`)
 9. Reservation reference code & status timeline
 
 ---
@@ -315,30 +315,21 @@ Maintenance prevents damaged or uncalibrated units from being rented:
 
 ---
 
-## 15. PAYMENTS AND DEPOSITS SCOPE (ACADEMIC / SIMULATED)
+## 15. PAYMENTS AND DEPOSITS SCOPE & INTENTIONAL METHOD BOUNDARY
 
-### Payment & Deposit Architecture:
-IDIO is an academic and operational SaaS demonstration.
-**Do NOT implement real payment processing gateways or third-party financial APIs.**
+### Intentional Scope Decision: Cash on Counter Pickup Only
+**Cash on Counter Pickup (`CASH_PICKUP`) is the ONLY supported payment method at this stage.**  
+This is an **intentional academic and operational scope decision** pending formal consultation with our course instructor regarding the efficiency, counter logistics, and feasibility of introducing electronic payment channels.
 
-### Allowed:
-- Tracking rental amount (in PHP ₱)
-- Tracking refundable security deposit amount (in PHP ₱)
-- Payment method recording (`CASH_PICKUP`, `GCASH`, `MAYA`, `BANK_TRANSFER`)
-- Payment status (`PENDING`, `PAID`, `REFUNDED`)
-- Deposit status (`HELD`, `REFUNDED`, `DEDUCTED`, `FORFEITED`)
-- Recording manual payment reference number (e.g. GCash reference ID)
-- Admin payment verification and settlement
-- Recording deposit damage deductions with itemized justification
-
-### NOT Allowed (At This Stage):
-- Real GCash / Maya API SDKs
-- Stripe / PayPal / PayMongo
-- Real bank APIs or card processing
-- Storing credit card numbers or sensitive financial credentials
-- Real monetary charges
-
-The payment module accurately represents the rental business workflow without executing real money transactions.
+### Scope Invariants & Architectural Rules:
+1. **Customer UI Scope**: Display strictly Cash on Counter Pickup in customer reservation modals and booking summaries. Do not offer GCash, Maya, or bank transfer options in customer booking interfaces.
+2. **Server-Side Enforcement**: Validate and enforce `paymentMethod === 'CASH_PICKUP'` for all newly submitted reservations. Reject requests attempting to pass `GCASH`, `MAYA`, `BANK_TRANSFER`, or any unapproved method.
+3. **Database Boundary Protection**: Database RLS policies (`payments_customer_insert`) strictly enforce `payment_method = 'CASH_PICKUP'` on customer inserts.
+4. **Historical Record Preservation**: Maintain all historical payment and ledger records (`GCASH`, `MAYA`, `BANK_TRANSFER`, `CASH_PICKUP`) and existing customer transaction history without alteration or deletion.
+5. **Lifecycle State Separation**: Keep financial lifecycle states (`payment_status`: `PENDING`, `PAID`, `REFUNDED`; `deposit_status`: `HELD`, `REFUNDED`, `DEDUCTED`, `FORFEITED`) strictly independent from reservation status (`PENDING_APPROVAL`, `APPROVED`, `REJECTED`, `CANCELLED`) and rental handover status (`CHECKED_OUT`, `RETURNED`, `COMPLETED`).
+6. **Extensible Architecture**: Preserve the database `payment_method` enum and TypeScript domain union (`'GCASH' | 'CASH_PICKUP' | 'MAYA' | 'BANK_TRANSFER'`) so alternative channels can be evaluated and re-enabled later without requiring an invasive database rewrite or breaking existing historical rows.
+7. **No Unapproved Integrations**: Do NOT implement real or simulated GCash/Maya/Stripe gateways or assume instructor approval.
+8. **Production Readiness Caution**: Do not claim the system is fully production-ready solely because Cash Pickup is the only payment option; operational readiness requires complete security remediation, counter reconciliation, and physical inspection controls.
 
 ---
 

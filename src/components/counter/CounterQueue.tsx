@@ -19,8 +19,11 @@ import {
   AlertCircle, 
   Check, 
   X, 
-  Sparkles
+  Sparkles,
+  Loader2,
+  AlertTriangle
 } from 'lucide-react';
+import { useFeedback } from '../../context/FeedbackContext';
 
 export const CounterQueue: React.FC = () => {
   const { 
@@ -36,17 +39,25 @@ export const CounterQueue: React.FC = () => {
   const [selectedVoucher, setSelectedVoucher] = useState<Reservation | null>(null);
   const [rejectPromptId, setRejectPromptId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('Customer ID or schedule conflict.');
-  const [actionAlert, setActionAlert] = useState<string | null>(null);
+  const { showSuccess, showError } = useFeedback();
+  const [processingId, setProcessingId] = useState<string | null>(null);
 
-  const showAlert = (msg: string) => {
-    setActionAlert(msg);
-    setTimeout(() => setActionAlert(null), 4000);
+  const showAlert = (message: string, type: 'success' | 'error' = 'success') => {
+    if (type === 'success') {
+      showSuccess(message);
+    } else {
+      showError(message);
+    }
   };
+
+  // Helpers
+  const isCameraCheckedOut = (cameraId: string) => cameras.find(c => c.id === cameraId)?.status === 'CHECKED_OUT';
+  const isReservationActiveRental = (r: Reservation) => r.status === 'CHECKED_OUT' || (r.status === 'APPROVED' && isCameraCheckedOut(r.cameraId));
 
   // Metrics
   const pendingCount = reservations.filter(r => r.status === 'PENDING_APPROVAL').length;
-  const readyPickupCount = reservations.filter(r => r.status === 'APPROVED').length;
-  const activeRentalsCount = reservations.filter(r => r.status === 'CHECKED_OUT').length;
+  const readyPickupCount = reservations.filter(r => r.status === 'APPROVED' && !isCameraCheckedOut(r.cameraId)).length;
+  const activeRentalsCount = reservations.filter(r => isReservationActiveRental(r)).length;
   const maintenanceCount = cameras.filter(c => c.status === 'MAINTENANCE' || c.status === 'DAMAGED').length;
 
   // Filtered reservations
@@ -60,23 +71,13 @@ export const CounterQueue: React.FC = () => {
     );
   }, [reservations, searchQuery]);
 
-  const approvedList = filteredReservations.filter(r => r.status === 'APPROVED');
-  const checkedOutList = filteredReservations.filter(r => r.status === 'CHECKED_OUT');
+  const approvedList = filteredReservations.filter(r => r.status === 'APPROVED' && !isCameraCheckedOut(r.cameraId));
+  const checkedOutList = filteredReservations.filter(r => isReservationActiveRental(r));
   const pendingList = filteredReservations.filter(r => r.status === 'PENDING_APPROVAL');
   const completedList = filteredReservations.filter(r => r.status === 'COMPLETED');
 
   return (
     <div className="space-y-6">
-      {/* Alert Banner */}
-      {actionAlert && (
-        <div className="p-3.5 bg-zinc-900 text-white rounded-xl text-xs font-medium flex items-center justify-between shadow-xs">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-zinc-300" />
-            <span>{actionAlert}</span>
-          </div>
-          <button onClick={() => setActionAlert(null)} className="text-zinc-400 hover:text-white cursor-pointer">✕</button>
-        </div>
-      )}
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-200">
@@ -375,18 +376,42 @@ export const CounterQueue: React.FC = () => {
                         className="bg-white text-zinc-900 text-xs px-2 py-1 rounded border border-zinc-300"
                       />
                       <button
+                        type="button"
+                        disabled={processingId === res.id}
                         onClick={async () => {
-                          const r = await rejectReservation(res.id, rejectReason);
-                          if (r.success) {
-                            showAlert(`Rejected reservation ${res.referenceNo}`);
-                            setRejectPromptId(null);
+                          if (!rejectReason.trim()) {
+                            showAlert('Please provide a rejection reason.', 'error');
+                            return;
+                          }
+                          setProcessingId(res.id);
+                          try {
+                            const r = await rejectReservation(res.id, rejectReason.trim());
+                            setProcessingId(null);
+                            if (r.success) {
+                              showAlert(`Rejected reservation ${res.referenceNo}`);
+                              setRejectPromptId(null);
+                            } else {
+                              showAlert(`Failed to reject ${res.referenceNo}: ${r.message}`, 'error');
+                            }
+                          } catch (err: any) {
+                            setProcessingId(null);
+                            showAlert(`Error rejecting: ${err.message}`, 'error');
                           }
                         }}
-                        className="px-2.5 py-1 bg-rose-600 text-white text-xs font-medium rounded hover:bg-rose-500 cursor-pointer"
+                        className="px-2.5 py-1 bg-rose-600 text-white text-xs font-medium rounded hover:bg-rose-500 cursor-pointer disabled:opacity-50 flex items-center gap-1"
                       >
-                        Confirm
+                        {processingId === res.id ? (
+                          <>
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            <span>...</span>
+                          </>
+                        ) : (
+                          <span>Confirm</span>
+                        )}
                       </button>
                       <button
+                        type="button"
+                        disabled={processingId === res.id}
                         onClick={() => setRejectPromptId(null)}
                         className="text-zinc-400 hover:text-zinc-700 text-xs cursor-pointer"
                       >
@@ -396,22 +421,45 @@ export const CounterQueue: React.FC = () => {
                   ) : (
                     <>
                       <button
-                        onClick={() => setRejectPromptId(res.id)}
-                        className="px-3 py-1.5 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 text-zinc-600 text-xs font-medium border border-zinc-200 flex items-center gap-1 transition cursor-pointer"
+                        type="button"
+                        disabled={processingId === res.id}
+                        onClick={() => {
+                          setRejectPromptId(res.id);
+                          setRejectReason('Customer ID or schedule conflict.');
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 text-zinc-600 text-xs font-medium border border-zinc-200 flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
                       >
                         <X className="w-3.5 h-3.5" />
                         <span>Reject</span>
                       </button>
                       <button
+                        type="button"
+                        disabled={processingId === res.id}
                         onClick={async () => {
-                          const r = await approveReservation(res.id);
-                          if (r.success) showAlert(`Approved reservation ${res.referenceNo}`);
-                          else showAlert(`Failed to approve: ${r.message}`);
+                          setProcessingId(res.id);
+                          try {
+                            const r = await approveReservation(res.id);
+                            setProcessingId(null);
+                            if (r.success) showAlert(`Approved reservation ${res.referenceNo}`);
+                            else showAlert(`Failed to approve: ${r.message}`, 'error');
+                          } catch (err: any) {
+                            setProcessingId(null);
+                            showAlert(`Error approving: ${err.message}`, 'error');
+                          }
                         }}
-                        className="px-3.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+                        className="px-3.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium flex items-center gap-1.5 transition shadow-xs cursor-pointer disabled:opacity-50"
                       >
-                        <Check className="w-4 h-4" />
-                        <span>Approve</span>
+                        {processingId === res.id ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Approving...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-4 h-4" />
+                            <span>Approve</span>
+                          </>
+                        )}
                       </button>
                     </>
                   )}

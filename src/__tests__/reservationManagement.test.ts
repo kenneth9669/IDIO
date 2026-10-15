@@ -9,7 +9,9 @@ import {
 } from '../lib/reservations/reservationService';
 import {
   validateReservationInput,
-  validateReservationTransition
+  validateReservationTransition,
+  VALID_PAYMENT_METHODS,
+  ALLOWED_NEW_PAYMENT_METHODS
 } from '../lib/reservations/reservationValidation';
 import { checkCameraAvailability } from '../lib/availabilityEngine';
 import { ProfileRow, DigitalCameraRow, ReservationRow } from '../types/database';
@@ -260,8 +262,10 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
         startDate: '2026-11-10',
         endDate: '2026-11-12', // 3 inclusive days
         purpose: 'Wedding shoot in Libertad',
-        paymentMethod: 'GCASH',
-        paymentReference: 'GCASH-998877'
+        paymentMethod: 'CASH_PICKUP',
+        paymentReference: 'CASH-998877',
+        agreementAccepted: true,
+        agreementVersion: 'v1.0'
       });
 
       expect(result.success).toBe(true);
@@ -287,7 +291,9 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
         startDate: '2026-11-10',
         endDate: '2026-11-12',
         purpose: 'Creative shoot',
-        paymentMethod: 'CASH_PICKUP'
+        paymentMethod: 'CASH_PICKUP',
+        agreementAccepted: true,
+        agreementVersion: 'v1.0'
       });
 
       expect(result.success).toBe(true);
@@ -306,7 +312,9 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
         startDate: '2026-11-10',
         endDate: '2026-11-12',
         purpose: 'Test customer binding',
-        paymentMethod: 'GCASH'
+        paymentMethod: 'CASH_PICKUP',
+        agreementAccepted: true,
+        agreementVersion: 'v1.0'
       });
 
       expect(result.success).toBe(true);
@@ -415,7 +423,7 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
         startDate: '',
         endDate: '2026-11-12',
         purpose: 'Test',
-        paymentMethod: 'GCASH'
+        paymentMethod: 'CASH_PICKUP'
       });
       expect(val.isValid).toBe(false);
       expect(val.errors.some(e => e.includes('start date is required'))).toBe(true);
@@ -427,7 +435,7 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
         startDate: '2026-11-15',
         endDate: '2026-11-10',
         purpose: 'Test',
-        paymentMethod: 'GCASH'
+        paymentMethod: 'CASH_PICKUP'
       });
       expect(val.isValid).toBe(false);
       expect(val.errors.some(e => e.includes('cannot be earlier than start date'))).toBe(true);
@@ -439,7 +447,7 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
         startDate: '2020-01-01',
         endDate: '2020-01-03',
         purpose: 'Test past date',
-        paymentMethod: 'GCASH'
+        paymentMethod: 'CASH_PICKUP'
       });
       expect(val.isValid).toBe(false);
       expect(val.errors.some(e => e.includes('cannot be in the past'))).toBe(true);
@@ -458,7 +466,9 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
         startDate: '2026-11-10',
         endDate: '2026-11-12',
         purpose: 'Test',
-        paymentMethod: 'GCASH'
+        paymentMethod: 'CASH_PICKUP',
+        agreementAccepted: true,
+        agreementVersion: 'v1.0'
       });
 
       expect(result.success).toBe(false);
@@ -476,7 +486,9 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
         startDate: '2026-11-10',
         endDate: '2026-11-12',
         purpose: 'Test',
-        paymentMethod: 'GCASH'
+        paymentMethod: 'CASH_PICKUP',
+        agreementAccepted: true,
+        agreementVersion: 'v1.0'
       });
 
       expect(result.success).toBe(false);
@@ -540,7 +552,7 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
       // Overlap attempt: 2026-11-12 to 2026-11-14 (inside 10-15)
       const check = checkCameraAvailability(activeCam, '2026-11-12', '2026-11-14', [existingRes]);
       expect(check.isAvailable).toBe(false);
-      expect(check.reason).toContain('already reserved/rented from 2026-11-10 to 2026-11-15');
+      expect(check.reason).toContain('unavailable for your selected dates');
     });
 
     it('rejects overlapping reservation when active APPROVED reservation exists', () => {
@@ -728,14 +740,16 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
         startDate: '2026-11-10',
         endDate: '2026-11-12',
         purpose: 'Test checked out',
-        paymentMethod: 'GCASH'
+        paymentMethod: 'CASH_PICKUP',
+        agreementAccepted: true,
+        agreementVersion: 'v1.0'
       });
 
       expect(result.success).toBe(false);
       expect(result.message).toContain('Camera is currently checked out');
     });
 
-    it('allows adjacent non-overlapping rental dates (e.g. Oct 10-12 and Oct 13-15)', () => {
+    it('enforces two-calendar-day buffer after rental (Oct 13-14 blocked, Oct 15 allowed)', () => {
       const activeCam: DigitalCamera = {
         id: 'CAM-001',
         serialNumber: 'SN-01',
@@ -789,9 +803,14 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
         updatedAt: ''
       };
 
-      // Adjacent date starting the very next day (Oct 13-15) -> Available
-      const check = checkCameraAvailability(activeCam, '2026-10-13', '2026-10-15', [existingBooking]);
-      expect(check.isAvailable).toBe(true);
+      // Day immediately after rental (Oct 13) is allowed (no artificial buffer blocking)
+      const checkAdjacent = checkCameraAvailability(activeCam, '2026-10-13', '2026-10-15', [existingBooking]);
+      expect(checkAdjacent.isAvailable).toBe(true);
+      expect(checkAdjacent.reason).toBe('Available for your selected dates.');
+
+      // Date range starting later (Oct 15) is also allowed
+      const checkLater = checkCameraAvailability(activeCam, '2026-10-15', '2026-10-17', [existingBooking]);
+      expect(checkLater.isAvailable).toBe(true);
     });
 
     it('rejects touching boundary overlapping dates (e.g. Oct 10-12 and Oct 12-15)', () => {
@@ -848,10 +867,11 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
         updatedAt: ''
       };
 
-      // Overlap on Oct 12 -> Rejected
+      // Overlap on Oct 12 -> Rejected with contextual expected availability message
       const check = checkCameraAvailability(activeCam, '2026-10-12', '2026-10-15', [existingBooking]);
       expect(check.isAvailable).toBe(false);
-      expect(check.reason).toContain('already reserved/rented from 2026-10-10 to 2026-10-12');
+      expect(check.reason).toContain('unavailable for your selected dates');
+      expect(check.reason).toContain('Expected availability: Oct 13, 2026, subject to return and inspection');
     });
   });
 
@@ -872,7 +892,9 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
         startDate: '2026-11-10',
         endDate: '2026-11-12',
         purpose: 'Concurrent booking attempt',
-        paymentMethod: 'GCASH'
+        paymentMethod: 'CASH_PICKUP',
+        agreementAccepted: true,
+        agreementVersion: 'v1.0'
       });
 
       expect(result.success).toBe(false);
@@ -894,7 +916,9 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
         startDate: '2026-11-10',
         endDate: '2026-11-12', // 3 days
         purpose: 'Tampering attempt',
-        paymentMethod: 'GCASH',
+        paymentMethod: 'CASH_PICKUP',
+        agreementAccepted: true,
+        agreementVersion: 'v1.0',
         dailyRate: 1,
         subtotal: 1,
         securityDeposit: 1,
@@ -947,6 +971,94 @@ describe('Phase 5: Reservation & Availability Management Subsystem', () => {
       const trans2 = validateReservationTransition('CANCELLED', 'APPROVED');
       expect(trans2.isValid).toBe(false);
       expect(trans2.errors[0]).toContain("Cannot transition from 'CANCELLED' to 'APPROVED'");
+    });
+  });
+
+  describe('8. Payment Method Enforcement & Historical Preservation', () => {
+    it('accepts Cash on Counter Pickup (CASH_PICKUP) for new reservations', () => {
+      const val = validateReservationInput({
+        cameraId: 'CAM-001',
+        startDate: '2026-11-10',
+        endDate: '2026-11-12',
+        purpose: 'Creative photography in Butuan City',
+        paymentMethod: 'CASH_PICKUP',
+        agreementAccepted: true,
+        agreementVersion: 'v1.0'
+      });
+      expect(val.isValid).toBe(true);
+      expect(val.errors).toHaveLength(0);
+    });
+
+    it('rejects GCash for new reservations with clear error message', () => {
+      const val = validateReservationInput({
+        cameraId: 'CAM-001',
+        startDate: '2026-11-10',
+        endDate: '2026-11-12',
+        purpose: 'Test Shoot',
+        paymentMethod: 'GCASH',
+        agreementAccepted: true,
+        agreementVersion: 'v1.0'
+      });
+      expect(val.isValid).toBe(false);
+      expect(val.errors[0]).toContain("Unsupported payment method 'GCASH'");
+      expect(val.errors[0]).toContain("only Cash on Counter Pickup ('CASH_PICKUP') is accepted");
+    });
+
+    it('rejects Maya and Bank Transfer for new reservations', () => {
+      const valMaya = validateReservationInput({
+        cameraId: 'CAM-001',
+        startDate: '2026-11-10',
+        endDate: '2026-11-12',
+        purpose: 'Test Shoot',
+        paymentMethod: 'MAYA',
+        agreementAccepted: true,
+        agreementVersion: 'v1.0'
+      });
+      expect(valMaya.isValid).toBe(false);
+      expect(valMaya.errors[0]).toContain("Unsupported payment method 'MAYA'");
+
+      const valBank = validateReservationInput({
+        cameraId: 'CAM-001',
+        startDate: '2026-11-10',
+        endDate: '2026-11-12',
+        purpose: 'Test Shoot',
+        paymentMethod: 'BANK_TRANSFER',
+        agreementAccepted: true,
+        agreementVersion: 'v1.0'
+      });
+      expect(valBank.isValid).toBe(false);
+      expect(valBank.errors[0]).toContain("Unsupported payment method 'BANK_TRANSFER'");
+    });
+
+    it('rejects createReservation when unsupported payment methods bypass customer UI', async () => {
+      setupMockSupabase({
+        user: mockCustomerProfile,
+        camera: sampleCameraRow,
+        reservations: []
+      });
+
+      const result = await createReservation({
+        cameraId: 'CAM-001',
+        startDate: '2026-11-10',
+        endDate: '2026-11-12',
+        purpose: 'Direct API injection test',
+        paymentMethod: 'GCASH',
+        paymentReference: 'BYPASS-ATTEMPT',
+        agreementAccepted: true,
+        agreementVersion: 'v1.0'
+      } as any);
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain("Unsupported payment method 'GCASH'");
+      expect(result.message).toContain("only Cash on Counter Pickup ('CASH_PICKUP') is accepted");
+    });
+
+    it('preserves all historical payment methods in VALID_PAYMENT_METHODS constant', () => {
+      expect(VALID_PAYMENT_METHODS).toContain('CASH_PICKUP');
+      expect(VALID_PAYMENT_METHODS).toContain('GCASH');
+      expect(VALID_PAYMENT_METHODS).toContain('MAYA');
+      expect(VALID_PAYMENT_METHODS).toContain('BANK_TRANSFER');
+      expect(ALLOWED_NEW_PAYMENT_METHODS).toEqual(['CASH_PICKUP']);
     });
   });
 });

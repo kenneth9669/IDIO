@@ -14,7 +14,8 @@ import {
 } from '../types';
 import { BUTUAN_BARANGAYS } from '../data/seedData';
 import { checkCameraAvailability } from './availabilityEngine';
-import { generateReferenceCode, calculateRentalDays } from './utils';
+import { generateReferenceCode, calculateRentalDays, getBufferEndDate } from './utils';
+import { CURRENT_AGREEMENT_VERSION } from '../data/rentalAgreement';
 
 export interface OperationResult<T = any> {
   success: boolean;
@@ -168,6 +169,8 @@ export function serviceCreateReservation(
     paymentMethod: data.paymentMethod,
     paymentReference: data.paymentReference?.trim() || undefined,
     depositStatus: 'HELD',
+    bufferEndDate: getBufferEndDate(data.endDate),
+    agreementVersion: (data as any).agreementVersion || CURRENT_AGREEMENT_VERSION,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };

@@ -12,7 +12,8 @@ import {
   Printer, 
   ShieldCheck, 
   Calendar, 
-  User
+  User,
+  AlertTriangle
 } from 'lucide-react';
 
 interface RentalVoucherModalProps {
@@ -82,6 +83,22 @@ export const RentalVoucherModal: React.FC<RentalVoucherModalProps> = ({
             </div>
           </div>
 
+          {/* Rejection Notice if applicable */}
+          {reservation.status === 'REJECTED' && (
+            <div className="p-4 bg-white border border-zinc-200 rounded-xl space-y-1.5 text-xs shadow-xs">
+              <div className="flex items-center gap-2 font-bold text-zinc-900">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>Reservation Rejected by IDIO Store Management</span>
+              </div>
+              <p className="text-zinc-600 pl-6 leading-relaxed">
+                <strong className="text-zinc-800">Rejection Reason:</strong> {reservation.rejectionReason || 'Equipment scheduling conflict or customer identity verification issue.'}
+              </p>
+              <p className="text-[11px] text-zinc-500 pl-6">
+                No rental fee or deposit has been collected for this rejected reservation.
+              </p>
+            </div>
+          )}
+
           {/* Rented Camera Info */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-center bg-zinc-50 p-4 rounded-xl border border-zinc-200">
             <div className="w-full h-28 sm:h-24 bg-white p-2 rounded-lg border border-zinc-200 flex items-center justify-center">
@@ -125,6 +142,9 @@ export const RentalVoucherModal: React.FC<RentalVoucherModalProps> = ({
               <p className="text-zinc-600 mt-1">
                 Duration: {reservation.totalDays} Day{reservation.totalDays > 1 ? 's' : ''}
               </p>
+              <div className="pt-1.5 mt-1 border-t border-zinc-200/80 text-[11px] text-zinc-500">
+                Pick-up and return at IDIO storefront in Butuan City.
+              </div>
             </div>
 
             <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200 space-y-1">
@@ -140,6 +160,10 @@ export const RentalVoucherModal: React.FC<RentalVoucherModalProps> = ({
               <p className="text-[11px] text-zinc-400">
                 ID: {reservation.idType} ({reservation.idNumber})
               </p>
+              <div className="pt-1.5 mt-1 border-t border-zinc-200/80 text-[11px] text-emerald-700 font-medium flex items-center gap-1">
+                <span>✓ Rental Agreement:</span>
+                <span className="font-mono">{reservation.agreementVersion || 'v1.0'} Accepted</span>
+              </div>
             </div>
           </div>
 

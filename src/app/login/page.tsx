@@ -1,30 +1,45 @@
 'use client';
 
-import React, { useState, Suspense } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
-import { Camera, Shield, User, Lock, Mail, ArrowRight, AlertCircle } from 'lucide-react';
+import { Camera, Lock, Mail, ArrowRight, AlertCircle } from 'lucide-react';
 import { SignInButton, useUser } from '@clerk/nextjs';
 
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectPath = searchParams.get('redirect') || '/';
+  const redirectPath = searchParams.get('redirect') || '';
   const errorParam = searchParams.get('error');
 
-  const { signIn, isLoading } = useAuth();
+  const { user, profile, signIn, signOut, isLoading } = useAuth();
   const { isSignedIn: isClerkSignedIn, isLoaded: isClerkLoaded } = useUser();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [activeTab, setActiveTab] = useState<'CUSTOMER' | 'ADMIN'>('CUSTOMER');
   const [errorMessage, setErrorMessage] = useState(
     errorParam === 'unauthorized_admin_access'
       ? 'Access Denied: You must be logged in as an ADMIN to access administrative operations.'
+      : errorParam === 'auth_callback_failed'
+      ? 'Authentication callback failed. Please try signing in again.'
       : ''
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // If already authenticated and no security error is being displayed,
+  // automatically route the user to their authorized destination without loops.
+  useEffect(() => {
+    if (!isLoading && user && profile && !errorParam) {
+      if (profile.role === 'ADMIN') {
+        const adminTarget = redirectPath && redirectPath.startsWith('/admin') ? redirectPath : '/admin';
+        router.replace(adminTarget);
+      } else {
+        const custTarget = redirectPath && !redirectPath.startsWith('/admin') && redirectPath !== '/login' ? redirectPath : '/';
+        router.replace(custTarget);
+      }
+    }
+  }, [user, profile, isLoading, errorParam, redirectPath, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,7 +50,16 @@ function LoginForm() {
     setIsSubmitting(false);
 
     if (result.success) {
-      router.push(redirectPath);
+      const userRole = result.role || 'CUSTOMER';
+      if (userRole === 'ADMIN') {
+        // Authorized ADMIN: direct to admin operations or requested admin sub-route
+        const adminDestination = redirectPath && redirectPath.startsWith('/admin') ? redirectPath : '/admin';
+        router.push(adminDestination);
+      } else {
+        // CUSTOMER: route to customer portal. If they tried accessing an admin URL, safely route to customer home.
+        const custDestination = redirectPath && !redirectPath.startsWith('/admin') && redirectPath !== '/login' ? redirectPath : '/';
+        router.push(custDestination);
+      }
       router.refresh();
     } else {
       setErrorMessage(result.message);
@@ -59,13 +83,38 @@ function LoginForm() {
 
       {/* Main Login Form */}
       <div className="bg-white border border-zinc-200 rounded-2xl p-6 sm:p-8 space-y-5 shadow-xs">
+        {/* Active Session Status Notice */}
+        {(user || (isClerkLoaded && isClerkSignedIn)) && (
+          <div className="p-3.5 bg-zinc-50 border border-zinc-200 rounded-xl space-y-2 text-xs">
+            <p className="text-zinc-700">
+              Active session detected: <strong>{profile?.full_name || user?.email || 'Authenticated User'}</strong>
+              {profile?.role && <span className="ml-1 text-[10px] uppercase font-bold text-zinc-500">({profile.role})</span>}
+            </p>
+            <div className="flex items-center gap-2 pt-1">
+              <Link
+                href={profile?.role === 'ADMIN' ? '/admin' : '/'}
+                className="px-3 py-1.5 bg-zinc-900 text-white rounded-lg text-xs font-semibold hover:bg-zinc-800 transition"
+              >
+                Go to Dashboard
+              </Link>
+              <button
+                type="button"
+                onClick={() => signOut()}
+                className="px-3 py-1.5 bg-white border border-zinc-200 text-zinc-700 rounded-lg text-xs font-semibold hover:bg-zinc-50 transition cursor-pointer"
+              >
+                Sign Out
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Clerk SSO Authentication – only shown when NOT already signed in */}
         {isClerkLoaded && !isClerkSignedIn && (
           <div>
             <SignInButton mode="modal">
               <button
                 type="button"
-                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-800 text-xs font-semibold shadow-xs transition"
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-800 text-xs font-semibold shadow-xs transition cursor-pointer"
               >
                 <Lock className="w-3.5 h-3.5 text-zinc-600" />
                 <span>Continue with Clerk Account</span>
@@ -82,34 +131,6 @@ function LoginForm() {
           </div>
         )}
 
-        {/* Tab Selection */}
-        <div className="flex p-1 bg-zinc-100 rounded-lg">
-          <button
-            type="button"
-            onClick={() => setActiveTab('CUSTOMER')}
-            className={`flex-1 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
-              activeTab === 'CUSTOMER'
-                ? 'bg-white text-zinc-900 shadow-xs'
-                : 'text-zinc-500 hover:text-zinc-900'
-            }`}
-          >
-            <User className="w-3.5 h-3.5" />
-            <span>Customer Portal</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('ADMIN')}
-            className={`flex-1 py-2 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
-              activeTab === 'ADMIN'
-                ? 'bg-white text-zinc-900 shadow-xs'
-                : 'text-zinc-500 hover:text-zinc-900'
-            }`}
-          >
-            <Shield className="w-3.5 h-3.5" />
-            <span>Admin Desk</span>
-          </button>
-        </div>
-
         {errorMessage && (
           <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs flex items-start gap-2">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
@@ -119,7 +140,7 @@ function LoginForm() {
 
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
           <div className="space-y-1.5">
-            <label className="block text-zinc-700 font-medium text-xs">
+            <label htmlFor="email" className="block text-zinc-700 font-medium text-xs">
               Email Address
             </label>
             <div className="relative">
@@ -130,7 +151,7 @@ function LoginForm() {
                 value={email}
                 required
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder={activeTab === 'ADMIN' ? 'admin@idiocameras.ph' : 'your.email@example.com'}
+                placeholder="your.email@example.com"
                 className="w-full bg-white border border-zinc-200 rounded-lg pl-10 pr-4 py-2 text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 text-xs"
               />
             </div>
@@ -157,9 +178,9 @@ function LoginForm() {
           <button
             type="submit"
             disabled={isSubmitting || isLoading}
-            className="w-full py-2.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white font-semibold text-xs flex items-center justify-center gap-2 transition disabled:opacity-50"
+            className="w-full py-2.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white font-semibold text-xs flex items-center justify-center gap-2 transition disabled:opacity-50 cursor-pointer shadow-xs"
           >
-            <span>{isSubmitting ? 'Authenticating...' : `Sign in as ${activeTab === 'ADMIN' ? 'Administrator' : 'Customer'}`}</span>
+            <span>{isSubmitting ? 'Authenticating...' : 'Sign In'}</span>
             <ArrowRight className="w-4 h-4" />
           </button>
         </form>

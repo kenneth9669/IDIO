@@ -480,13 +480,29 @@ describe('Phase 7 — Payments & Security Deposit Settlement', () => {
 
     const res = await confirmPayment({
       paymentId: samplePaymentRow.id,
-      paymentMethod: 'GCASH',
-      paymentReference: 'GCASH-2026-8888'
+      paymentMethod: 'CASH_PICKUP',
+      paymentReference: 'CASH-REC-2026-8888'
     });
 
     expect(res.success).toBe(true);
     expect(res.data?.paymentStatus).toBe('PAID');
-    expect(res.data?.paymentReference).toBe('GCASH-2026-8888');
+    expect(res.data?.paymentReference).toBe('CASH-REC-2026-8888');
+  });
+
+  it('4b. Admin confirmation rejects unsupported payment methods for new transactions', async () => {
+    setupMockSupabase({
+      user: mockAdminProfile,
+      payment: { ...samplePaymentRow, payment_status: 'PENDING' }
+    });
+
+    const res = await confirmPayment({
+      paymentId: samplePaymentRow.id,
+      paymentMethod: 'GCASH',
+      paymentReference: 'GCASH-2026-8888'
+    });
+
+    expect(res.success).toBe(false);
+    expect(res.message).toContain("Unsupported payment method 'GCASH'");
   });
 
   // 5. Invalid payment method is rejected
@@ -515,7 +531,9 @@ describe('Phase 7 — Payments & Security Deposit Settlement', () => {
       startDate: '2026-11-10',
       endDate: '2026-11-12',
       purpose: 'Portrait shoot in Butuan',
-      paymentMethod: 'GCASH',
+      paymentMethod: 'CASH_PICKUP',
+      agreementAccepted: true,
+      agreementVersion: 'v1.0',
       dailyRate: 1,
       subtotal: 1
     } as any);
@@ -537,7 +555,9 @@ describe('Phase 7 — Payments & Security Deposit Settlement', () => {
       startDate: '2026-11-10',
       endDate: '2026-11-12',
       purpose: 'Wildlife photography',
-      paymentMethod: 'GCASH',
+      paymentMethod: 'CASH_PICKUP',
+      agreementAccepted: true,
+      agreementVersion: 'v1.0',
       securityDeposit: 0
     } as any);
 

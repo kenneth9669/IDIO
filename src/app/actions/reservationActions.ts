@@ -9,10 +9,12 @@ import {
   rejectReservation,
   cancelReservation,
   checkCameraAvailabilityServer,
+  getCameraAvailabilitySchedule,
   ReservationServiceResult
 } from '../../lib/reservations/reservationService';
 import { CreateReservationInput } from '../../lib/reservations/reservationValidation';
 import { Reservation } from '../../types';
+import { BookedDateRange } from '../../lib/availabilityEngine';
 
 /**
  * Server Action: Fetch reservations for the active user (own for Customer, all for Admin).
@@ -42,6 +44,16 @@ export async function checkCameraAvailabilityAction(
   endDate: string
 ): Promise<{ isAvailable: boolean; reason?: string }> {
   return await checkCameraAvailabilityServer(cameraId, startDate, endDate);
+}
+
+/**
+ * Server Action: Fetch shared database availability schedule for a camera.
+ * Zero-PII Guarantee: Exposes NO customer details to other users.
+ */
+export async function fetchCameraAvailabilityScheduleAction(
+  cameraId: string
+): Promise<ReservationServiceResult<BookedDateRange[]>> {
+  return await getCameraAvailabilitySchedule(cameraId);
 }
 
 /**
@@ -92,3 +104,12 @@ export async function cancelReservationAction(id: string): Promise<ReservationSe
   }
   return result;
 }
+
+/**
+ * Server Action: Fetch versioned rental agreement acceptance record for a reservation.
+ */
+export async function fetchAgreementAcceptanceAction(reservationId: string) {
+  const { getAgreementAcceptance } = await import('../../lib/agreements/agreementService');
+  return await getAgreementAcceptance(reservationId);
+}
+

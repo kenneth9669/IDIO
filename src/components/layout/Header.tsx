@@ -42,9 +42,25 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
   // Authenticated role is derived from the real Supabase session — cannot be mutated client-side
   const currentRole: UserRole = authRole || 'CUSTOMER';
 
+  const isCustomerSignedIn = Boolean((isClerkLoaded && isSignedIn) || (user && profile));
+
   const handleMobileNavClick = (tab: string) => {
     setActiveTab(tab);
     setIsMobileDrawerOpen(false);
+  };
+
+  const scrollToSection = (sectionId: string) => {
+    setIsMobileDrawerOpen(false);
+    if (activeTab !== 'home') {
+      setActiveTab('home');
+      setTimeout(() => {
+        const el = document.getElementById(sectionId);
+        el?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    } else {
+      const el = document.getElementById(sectionId);
+      el?.scrollIntoView({ behavior: 'smooth' });
+    }
   };
 
   const customerNavItems = [
@@ -137,45 +153,63 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                         : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
                     }`}
                   >
-                    Browse Cameras
+                    Cameras
                   </button>
                   <button
-                    onClick={() => setActiveTab('my-reservations')}
-                    className={`px-3 py-2 rounded-lg text-xs font-semibold transition min-h-[44px] inline-flex items-center cursor-pointer ${
-                      activeTab === 'my-reservations'
-                        ? 'bg-zinc-900 text-white shadow-xs'
-                        : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
-                    }`}
+                    onClick={() => scrollToSection('how-it-works')}
+                    className="px-3 py-2 rounded-lg text-xs font-semibold transition min-h-[44px] inline-flex items-center cursor-pointer text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
                   >
-                    My Reservations
+                    How It Works
                   </button>
                   <button
-                    onClick={() => setActiveTab('rentals-payments')}
-                    className={`px-3 py-2 rounded-lg text-xs font-semibold transition min-h-[44px] inline-flex items-center cursor-pointer ${
-                      activeTab === 'rentals-payments' || activeTab === 'my-rentals' || activeTab === 'payments'
-                        ? 'bg-zinc-900 text-white shadow-xs'
-                        : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
-                    }`}
+                    onClick={() => scrollToSection('about')}
+                    className="px-3 py-2 rounded-lg text-xs font-semibold transition min-h-[44px] inline-flex items-center cursor-pointer text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
                   >
-                    My Rentals &amp; Payments
+                    About
                   </button>
-                  <button
-                    onClick={() => setActiveTab('account')}
-                    className={`px-3 py-2 rounded-lg text-xs font-semibold transition min-h-[44px] inline-flex items-center cursor-pointer ${
-                      activeTab === 'account' || activeTab === 'profile' || activeTab === 'notifications'
-                        ? 'bg-zinc-900 text-white shadow-xs'
-                        : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
-                    }`}
-                  >
-                    My Account
-                  </button>
+
+                  {/* Additional tabs rendered when authenticated as a customer */}
+                  {isCustomerSignedIn && (
+                    <>
+                      <button
+                        onClick={() => setActiveTab('my-reservations')}
+                        className={`px-3 py-2 rounded-lg text-xs font-semibold transition min-h-[44px] inline-flex items-center cursor-pointer ${
+                          activeTab === 'my-reservations'
+                            ? 'bg-zinc-900 text-white shadow-xs'
+                            : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
+                        }`}
+                      >
+                        My Reservations
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('rentals-payments')}
+                        className={`px-3 py-2 rounded-lg text-xs font-semibold transition min-h-[44px] inline-flex items-center cursor-pointer ${
+                          activeTab === 'rentals-payments' || activeTab === 'my-rentals' || activeTab === 'payments'
+                            ? 'bg-zinc-900 text-white shadow-xs'
+                            : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
+                        }`}
+                      >
+                        My Rentals &amp; Payments
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('account')}
+                        className={`px-3 py-2 rounded-lg text-xs font-semibold transition min-h-[44px] inline-flex items-center cursor-pointer ${
+                          activeTab === 'account' || activeTab === 'profile' || activeTab === 'notifications'
+                            ? 'bg-zinc-900 text-white shadow-xs'
+                            : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
+                        }`}
+                      >
+                        My Account
+                      </button>
+                    </>
+                  )}
                 </>
               )}
             </nav>
 
             {/* Session Controls & Mobile Hamburger */}
             <div className="flex items-center gap-2 sm:gap-3">
-              {/* Authenticated Profile or Login Button */}
+              {/* Authenticated Profile or Login & Sign Up Buttons */}
               {isClerkLoaded && isSignedIn ? (
                 <div className="flex items-center gap-2 pl-2 border-l border-zinc-200">
                   <UserButton />
@@ -210,10 +244,16 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                 <div className="hidden sm:flex items-center gap-2 pl-2 border-l border-zinc-200">
                   <Link
                     href="/login"
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[44px] rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold transition shadow-xs"
+                    className="px-3.5 py-2 min-h-[44px] inline-flex items-center text-xs font-semibold text-zinc-700 hover:text-zinc-950 transition"
                   >
-                    <LogIn className="w-4 h-4" />
-                    <span>Sign In</span>
+                    Log In
+                  </Link>
+                  <Link
+                    href="/register"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[44px] rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold transition shadow-xs"
+                  >
+                    <LogIn className="w-3.5 h-3.5" />
+                    <span>Sign Up</span>
                   </Link>
                 </div>
               )}
@@ -233,20 +273,58 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
 
         {/* Tablet & Mobile Horizontal Fast-Pills */}
         <div className="xl:hidden px-3 py-2 border-t border-zinc-200 overflow-x-auto flex gap-1.5 bg-zinc-50/70 scrollbar-none">
-          {customerNavItems.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setActiveTab(item.id)}
-              aria-label={item.label}
-              className={`px-3 py-1.5 min-h-[38px] rounded-md text-xs font-semibold whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 ${
-                activeTab === item.id
-                  ? 'bg-zinc-900 text-white shadow-xs'
-                  : 'bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-100'
-              }`}
-            >
-              <span>{item.label}</span>
-            </button>
-          ))}
+          {isCustomerSignedIn ? (
+            customerNavItems.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                aria-label={item.label}
+                className={`px-3 py-1.5 min-h-[38px] rounded-md text-xs font-semibold whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 ${
+                  activeTab === item.id
+                    ? 'bg-zinc-900 text-white shadow-xs'
+                    : 'bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-100'
+                }`}
+              >
+                <span>{item.label}</span>
+              </button>
+            ))
+          ) : (
+            <>
+              <button
+                onClick={() => setActiveTab('home')}
+                className={`px-3 py-1.5 min-h-[38px] rounded-md text-xs font-semibold whitespace-nowrap transition cursor-pointer ${
+                  activeTab === 'home'
+                    ? 'bg-zinc-900 text-white shadow-xs'
+                    : 'bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-100'
+                }`}
+              >
+                Home
+              </button>
+              <button
+                onClick={() => setActiveTab('catalog')}
+                aria-label="Browse Cameras"
+                className={`px-3 py-1.5 min-h-[38px] rounded-md text-xs font-semibold whitespace-nowrap transition cursor-pointer ${
+                  activeTab === 'catalog'
+                    ? 'bg-zinc-900 text-white shadow-xs'
+                    : 'bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-100'
+                }`}
+              >
+                Cameras
+              </button>
+              <button
+                onClick={() => scrollToSection('how-it-works')}
+                className="px-3 py-1.5 min-h-[38px] rounded-md text-xs font-semibold whitespace-nowrap transition cursor-pointer bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-100"
+              >
+                How It Works
+              </button>
+              <button
+                onClick={() => scrollToSection('about')}
+                className="px-3 py-1.5 min-h-[38px] rounded-md text-xs font-semibold whitespace-nowrap transition cursor-pointer bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-100"
+              >
+                About
+              </button>
+            </>
+          )}
         </div>
       </header>
 
@@ -308,14 +386,21 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                   </button>
                 </div>
               ) : (
-                <div className="p-4 bg-zinc-50 border-b border-zinc-200">
+                <div className="p-4 bg-zinc-50 border-b border-zinc-200 grid grid-cols-2 gap-2">
                   <Link
                     href="/login"
                     onClick={() => setIsMobileDrawerOpen(false)}
-                    className="w-full flex items-center justify-center gap-2 py-2.5 min-h-[44px] rounded-lg bg-zinc-900 text-white text-xs font-bold shadow-xs hover:bg-zinc-800 transition"
+                    className="w-full flex items-center justify-center gap-1.5 py-2.5 min-h-[44px] rounded-lg border border-zinc-300 bg-white text-zinc-900 text-xs font-bold shadow-xs hover:bg-zinc-100 transition"
                   >
                     <LogIn className="w-4 h-4" />
-                    <span>Customer Sign In</span>
+                    <span>Log In</span>
+                  </Link>
+                  <Link
+                    href="/register"
+                    onClick={() => setIsMobileDrawerOpen(false)}
+                    className="w-full flex items-center justify-center gap-1.5 py-2.5 min-h-[44px] rounded-lg bg-zinc-900 text-white text-xs font-bold shadow-xs hover:bg-zinc-800 transition"
+                  >
+                    <span>Sign Up</span>
                   </Link>
                 </div>
               )}
@@ -325,33 +410,118 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                 <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
                   Navigation
                 </div>
-                {customerNavItems.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = activeTab === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => handleMobileNavClick(item.id)}
-                      className={`w-full flex items-center justify-between px-3 py-2.5 min-h-[44px] rounded-lg text-xs font-medium transition cursor-pointer ${
-                        isActive
-                          ? 'bg-zinc-900 text-white font-semibold'
-                          : 'text-zinc-700 hover:bg-zinc-100'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-zinc-500'}`} />
-                        <div className="text-left">
-                          <p className="leading-tight">{item.label}</p>
-                          <p className={`text-[10px] ${isActive ? 'text-zinc-300' : 'text-zinc-400'} truncate`}>
-                            {item.desc}
-                          </p>
-                        </div>
-                      </div>
-                      <ChevronRight className={`w-4 h-4 shrink-0 ${isActive ? 'text-zinc-300' : 'text-zinc-400'}`} />
-                    </button>
-                  );
-                })}
+
+                <button
+                  type="button"
+                  onClick={() => handleMobileNavClick('home')}
+                  className={`w-full flex items-center justify-between px-3 py-2.5 min-h-[44px] rounded-lg text-xs font-medium transition cursor-pointer ${
+                    activeTab === 'home'
+                      ? 'bg-zinc-900 text-white font-semibold'
+                      : 'text-zinc-700 hover:bg-zinc-100'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Sparkles className={`w-4 h-4 shrink-0 ${activeTab === 'home' ? 'text-white' : 'text-zinc-500'}`} />
+                    <div className="text-left">
+                      <p className="leading-tight">Home</p>
+                      <p className={`text-[10px] ${activeTab === 'home' ? 'text-zinc-300' : 'text-zinc-400'} truncate`}>
+                        Overview, hero &amp; fleet
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className={`w-4 h-4 shrink-0 ${activeTab === 'home' ? 'text-zinc-300' : 'text-zinc-400'}`} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleMobileNavClick('catalog')}
+                  aria-label="Browse Cameras"
+                  className={`w-full flex items-center justify-between px-3 py-2.5 min-h-[44px] rounded-lg text-xs font-medium transition cursor-pointer ${
+                    activeTab === 'catalog'
+                      ? 'bg-zinc-900 text-white font-semibold'
+                      : 'text-zinc-700 hover:bg-zinc-100'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Camera className={`w-4 h-4 shrink-0 ${activeTab === 'catalog' ? 'text-white' : 'text-zinc-500'}`} />
+                    <div className="text-left">
+                      <p className="leading-tight">Cameras</p>
+                      <p className={`text-[10px] ${activeTab === 'catalog' ? 'text-zinc-300' : 'text-zinc-400'} truncate`}>
+                        Browse full camera fleet
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className={`w-4 h-4 shrink-0 ${activeTab === 'catalog' ? 'text-zinc-300' : 'text-zinc-400'}`} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => scrollToSection('how-it-works')}
+                  className="w-full flex items-center justify-between px-3 py-2.5 min-h-[44px] rounded-lg text-xs font-medium transition cursor-pointer text-zinc-700 hover:bg-zinc-100"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Layers className="w-4 h-4 shrink-0 text-zinc-500" />
+                    <div className="text-left">
+                      <p className="leading-tight">How It Works</p>
+                      <p className="text-[10px] text-zinc-400 truncate">
+                        Explore, reserve, pickup &amp; return
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 shrink-0 text-zinc-400" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => scrollToSection('about')}
+                  className="w-full flex items-center justify-between px-3 py-2.5 min-h-[44px] rounded-lg text-xs font-medium transition cursor-pointer text-zinc-700 hover:bg-zinc-100"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <MapPin className="w-4 h-4 shrink-0 text-zinc-500" />
+                    <div className="text-left">
+                      <p className="leading-tight">About</p>
+                      <p className="text-[10px] text-zinc-400 truncate">
+                        Local Butuan City rental hub
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 shrink-0 text-zinc-400" />
+                </button>
+
+                {isCustomerSignedIn && (
+                  <>
+                    <div className="px-3 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                      Customer Portal
+                    </div>
+                    {customerNavItems.slice(2).map((item) => {
+                      const Icon = item.icon;
+                      const isActive = activeTab === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => handleMobileNavClick(item.id)}
+                          className={`w-full flex items-center justify-between px-3 py-2.5 min-h-[44px] rounded-lg text-xs font-medium transition cursor-pointer ${
+                            isActive
+                              ? 'bg-zinc-900 text-white font-semibold'
+                              : 'text-zinc-700 hover:bg-zinc-100'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-zinc-500'}`} />
+                            <div className="text-left">
+                              <p className="leading-tight">{item.label}</p>
+                              <p className={`text-[10px] ${isActive ? 'text-zinc-300' : 'text-zinc-400'} truncate`}>
+                                {item.desc}
+                              </p>
+                            </div>
+                          </div>
+                          <ChevronRight className={`w-4 h-4 shrink-0 ${isActive ? 'text-zinc-300' : 'text-zinc-400'}`} />
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
               </div>
             </div>
 
