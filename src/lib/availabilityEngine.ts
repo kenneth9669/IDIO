@@ -12,7 +12,7 @@ export interface BookedDateRange {
   startDate: string;        // YYYY-MM-DD
   endDate: string;          // YYYY-MM-DD (contractual return date)
   referenceNo: string;
-  status: RentalStatus;
+  status: RentalStatus | 'MAINTENANCE' | 'DAMAGED';
   isOverdue?: boolean;
 }
 
@@ -224,6 +224,13 @@ export function checkCameraAvailability(
     const hasOverlap = startDate <= res.endDate && endDate >= res.startDate;
 
     if (hasOverlap) {
+      if ((res.status as string) === 'MAINTENANCE' || (res.status as string) === 'DAMAGED') {
+        return {
+          isAvailable: false,
+          reason: 'This camera is currently unavailable due to maintenance.',
+          conflictingReservation: res
+        };
+      }
       const expectedDate = addDays(res.endDate, 1);
       return {
         isAvailable: false,
@@ -253,9 +260,20 @@ export function getBookedDateRanges(
   return allReservations
     .filter(r => {
       if (r.cameraId !== cameraId) return false;
-      if (!BLOCKING_STATUSES.includes(r.status)) return false;
+      const isBlocking =
+        BLOCKING_STATUSES.includes(r.status) ||
+        (r.status as string) === 'MAINTENANCE' ||
+        (r.status as string) === 'DAMAGED';
+      if (!isBlocking) return false;
       // Exclude expired uncollected bookings that ended before today and were never checked out
-      if (r.status !== 'CHECKED_OUT' && r.endDate < todayStr) return false;
+      if (
+        r.status !== 'CHECKED_OUT' &&
+        (r.status as string) !== 'MAINTENANCE' &&
+        (r.status as string) !== 'DAMAGED' &&
+        r.endDate < todayStr
+      ) {
+        return false;
+      }
       return true;
     })
     .map(r => {

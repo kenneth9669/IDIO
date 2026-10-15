@@ -117,6 +117,36 @@ const mockCameraSony: DigitalCamera = {
   updatedAt: '2026-01-01T00:00:00Z'
 };
 
+const mockCameraCanonG7X: DigitalCamera = {
+  id: 'CAM-005',
+  serialNumber: 'SN-CANON-G7XM3-5590',
+  name: 'Canon PowerShot G7 X Mark III Digital Compact',
+  brand: 'Canon',
+  model: 'G7 X Mark III',
+  category: 'Compact',
+  dailyRate: 650,
+  securityDeposit: 1500,
+  status: 'AVAILABLE',
+  condition: 'Good',
+  specs: {
+    sensor: '20.1 MP 1.0-type Stacked CMOS Sensor',
+    megapixels: '20.1 MP',
+    videoResolution: '4K 30p / FHD 120p',
+    isoRange: '125 - 12,800',
+    lensMountOrKit: 'Fixed 24-100mm f/1.8-2.8',
+    screen: '3.0-inch 180° Flip-up Touchscreen',
+    connectivity: 'Wi-Fi, Bluetooth',
+    batteryLife: 'Approx. 265 shots',
+    weight: '304g'
+  },
+  description: 'Pocket-sized digital compact camera with f/1.8 lens.',
+  imageUrl: '/cameras/CAM-005.jpg',
+  packageIncludes: ['Camera Body', '2x Batteries', 'SD Card'],
+  totalRentalsCount: 45,
+  createdAt: '2026-02-01T10:00:00Z',
+  updatedAt: '2026-10-04T09:00:00Z'
+};
+
 const createReservationFixture = (overrides?: Partial<Reservation>): Reservation => ({
   id: 'res-fixture-001',
   referenceNo: 'IDIO-2026-F001',
@@ -480,4 +510,99 @@ describe('IDIO — Shared Camera Availability Calendar & Double-Booking Protecti
       expect((item as any).paymentStatus).toBeUndefined();
     }
   });
+
+  // Scenario 13: Customer A and Customer B both view Canon PowerShot G7 X Mark III for Oct 16–18, 2026
+  it('Scenario 13: Resolves bug where Customer A saw unavailable while Customer B saw reserved for CAM-005 Oct 16-18', async () => {
+    // Customer B booked Canon PowerShot G7 X Mark III for Oct 16-18, 2026 (APPROVED status, awaiting pickup)
+    const mockReservationOct16_18: Reservation = createReservationFixture({
+      id: 'res-canon-oct16',
+      referenceNo: 'IDIO-CANON-88',
+      cameraId: mockCameraCanonG7X.id,
+      customerId: mockCustomerB.id,
+      startDate: '2026-10-16',
+      endDate: '2026-10-18',
+      status: 'APPROVED'
+    });
+
+    // 1. Admin Dashboard verifies: 0 active rentals (camera is not CHECKED_OUT yet, it is reserved awaiting pickup)
+    const activeRentals = [mockReservationOct16_18].filter(r => r.status === 'CHECKED_OUT');
+    expect(activeRentals).toHaveLength(0);
+
+    // 2. Mock database returning the reservation for RPC query (Migration 011 SECURITY DEFINER)
+    const mockRpcSchedule = [
+      { start_date: '2026-10-16', end_date: '2026-10-18', schedule_status: 'RESERVED' }
+    ];
+
+    const mockClient = {
+      rpc: vi.fn().mockImplementation((fn: string) => {
+        if (fn === 'get_camera_availability_schedule') {
+          return Promise.resolve({ data: mockRpcSchedule, error: null });
+        }
+        return Promise.resolve({ data: null, error: null });
+      })
+    };
+
+    (createClient as any).mockResolvedValue(mockClient);
+
+    // 3. Customer A queries availability schedule for CAM-005
+    const scheduleForCustomerA = await getCameraAvailabilitySchedule(mockCameraCanonG7X.id);
+    expect(scheduleForCustomerA.success).toBe(true);
+    expect(scheduleForCustomerA.data).toHaveLength(1);
+    expect(scheduleForCustomerA.data![0].startDate).toBe('2026-10-16');
+    expect(scheduleForCustomerA.data![0].endDate).toBe('2026-10-18');
+    expect(scheduleForCustomerA.data![0].status).toBe('APPROVED'); // Maps to 'reserved' in UI
+
+    // 4. Customer B queries availability schedule for CAM-005
+    const scheduleForCustomerB = await getCameraAvailabilitySchedule(mockCameraCanonG7X.id);
+    expect(scheduleForCustomerB.success).toBe(true);
+    expect(scheduleForCustomerB.data).toHaveLength(1);
+    expect(scheduleForCustomerB.data![0].startDate).toBe('2026-10-16');
+    expect(scheduleForCustomerB.data![0].endDate).toBe('2026-10-18');
+    expect(scheduleForCustomerB.data![0].status).toBe('APPROVED'); // Maps to 'reserved' in UI
+
+    // 5. Assert: Both Customer A and Customer B receive IDENTICAL statuses and dates
+    expect(scheduleForCustomerA.data).toEqual(scheduleForCustomerB.data);
+
+    // 6. Test calendar booked ranges mapping
+    const bookedRanges = getBookedDateRanges(mockCameraCanonG7X.id, [mockReservationOct16_18]);
+    expect(bookedRanges).toHaveLength(1);
+    expect(bookedRanges[0].status).toBe('APPROVED'); // Rendered as yellow RESERVED, not gray UNAVAILABLE
+
+    // 7. Verify Customer A is blocked from overlapping dates Oct 16-18
+    const customerAOverlapCheck = checkCameraAvailability(
+      mockCameraCanonG7X,
+      '2026-10-16',
+      '2026-10-18',
+      [mockReservationOct16_18]
+    );
+    expect(customerAOverlapCheck.isAvailable).toBe(false);
+    expect(customerAOverlapCheck.reason).toContain('unavailable for your selected dates');
+
+    // 8. Verify non-blocked dates (e.g. Oct 20-22) are AVAILABLE (white)
+    const customerAFreeCheck = checkCameraAvailability(
+      mockCameraCanonG7X,
+      '2026-10-20',
+      '2026-10-22',
+      [mockReservationOct16_18]
+    );
+    expect(customerAFreeCheck.isAvailable).toBe(true);
+
+    // 9. If reservation is cancelled, dates become available to all customers
+    const cancelledReservation: Reservation = { ...mockReservationOct16_18, status: 'CANCELLED' };
+    const checkAfterCancellation = checkCameraAvailability(
+      mockCameraCanonG7X,
+      '2026-10-16',
+      '2026-10-18',
+      [cancelledReservation]
+    );
+    expect(checkAfterCancellation.isAvailable).toBe(true);
+
+    // 10. If admin executes checkout, status transitions to CHECKED_OUT ('RENTED' / rose)
+    const checkedOutReservation: Reservation = { ...mockReservationOct16_18, status: 'CHECKED_OUT' };
+    const bookedRangesAfterCheckout = getBookedDateRanges(mockCameraCanonG7X.id, [checkedOutReservation]);
+    expect(bookedRangesAfterCheckout[0].status).toBe('CHECKED_OUT');
+    const activeRentalsAfterCheckout = [checkedOutReservation].filter(r => r.status === 'CHECKED_OUT');
+    expect(activeRentalsAfterCheckout).toHaveLength(1);
+  });
 });
+

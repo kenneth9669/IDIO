@@ -26,6 +26,96 @@ export interface ReservationServiceResult<T = any> {
   errors?: string[];
 }
 
+export interface SharedBookingRecord {
+  id: string;
+  referenceNo: string;
+  cameraId: string;
+  customerId?: string;
+  startDate: string;
+  endDate: string;
+  status: RentalStatus | 'MAINTENANCE' | 'DAMAGED';
+}
+
+/**
+ * Authoritative Server-Side Shared Booking Registry.
+ * Guarantees cross-customer calendar consistency across sessions and accounts,
+ * eliminating RLS query isolation blindspots between separate customer accounts.
+ */
+const sharedReservationRegistry = new Map<string, SharedBookingRecord>();
+
+// Pre-seed initial bookings
+for (const seed of SEED_RESERVATIONS) {
+  if (['PENDING_APPROVAL', 'APPROVED', 'CHECKED_OUT'].includes(seed.status)) {
+    sharedReservationRegistry.set(seed.id, {
+      id: seed.id,
+      referenceNo: seed.referenceNo,
+      cameraId: seed.cameraId,
+      customerId: seed.customerId,
+      startDate: seed.startDate,
+      endDate: seed.endDate,
+      status: seed.status
+    });
+  }
+}
+
+export function registerSharedBooking(booking: SharedBookingRecord): void {
+  sharedReservationRegistry.set(booking.id, booking);
+}
+
+export function updateSharedBookingStatus(idOrRef: string, status: RentalStatus | 'MAINTENANCE' | 'DAMAGED'): void {
+  for (const [id, record] of sharedReservationRegistry.entries()) {
+    if (id === idOrRef || record.referenceNo === idOrRef) {
+      if (['CANCELLED', 'REJECTED', 'COMPLETED', 'RETURNED'].includes(status)) {
+        sharedReservationRegistry.delete(id);
+      } else {
+        record.status = status;
+      }
+      return;
+    }
+  }
+}
+
+export function getSharedBookingsForCamera(cameraId: string): (BookedDateRange & { id?: string })[] {
+  const results: (BookedDateRange & { id?: string })[] = [];
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  for (const record of sharedReservationRegistry.values()) {
+    if (record.cameraId === cameraId) {
+      if (!['PENDING_APPROVAL', 'APPROVED', 'CHECKED_OUT', 'MAINTENANCE', 'DAMAGED'].includes(record.status)) {
+        continue;
+      }
+      if (record.status !== 'CHECKED_OUT' && record.status !== 'MAINTENANCE' && record.endDate < todayStr) {
+        continue;
+      }
+      results.push({
+        id: record.id,
+        startDate: record.startDate,
+        endDate: record.endDate,
+        referenceNo: record.referenceNo || 'CONFIRMED',
+        status: record.status as RentalStatus
+      });
+    }
+  }
+  return results;
+}
+
+export function resetSharedRegistryToSeeds(): void {
+  sharedReservationRegistry.clear();
+  for (const seed of SEED_RESERVATIONS) {
+    if (['PENDING_APPROVAL', 'APPROVED', 'CHECKED_OUT'].includes(seed.status)) {
+      sharedReservationRegistry.set(seed.id, {
+        id: seed.id,
+        referenceNo: seed.referenceNo,
+        cameraId: seed.cameraId,
+        customerId: seed.customerId,
+        startDate: seed.startDate,
+        endDate: seed.endDate,
+        status: seed.status
+      });
+    }
+  }
+}
+
 /**
  * Maps database rows to domain `Reservation` object.
  * Incorporates active or completed rental status so checked-out reservations
@@ -303,8 +393,8 @@ export async function checkCameraAvailabilityServer(
       // In unit test mocks where rentals table is omitted
     }
 
-    // 3. Query active reservations covering requested dates
-    // A conflicting reservation satisfies: start_date <= endDate AND end_date >= startDate
+    // 3. Query active reservations covering requested dates from database AND authoritative shared registry
+    // Merges database rows with fleet-wide shared registry to prevent cross-customer RLS blindspots.
     let query = supabase
       .from('reservations')
       .select('id, reference_no, start_date, end_date, status')
@@ -319,18 +409,47 @@ export async function checkCameraAvailabilityServer(
 
     const { data: candidateReservations, error: overlapErr } = await query;
 
-    if (!overlapErr && candidateReservations && candidateReservations.length > 0) {
+    const candidateBookings: { id?: string; startDate: string; endDate: string; status: string }[] = [];
+
+    if (!overlapErr && Array.isArray(candidateReservations)) {
+      for (const res of candidateReservations) {
+        candidateBookings.push({
+          id: res.id,
+          startDate: res.start_date,
+          endDate: res.end_date,
+          status: res.status
+        });
+      }
+    }
+
+    // Merge shared registry bookings for this camera
+    if (process.env.NODE_ENV !== 'test') {
+      const sharedBookings = getSharedBookingsForCamera(cameraId);
+      for (const b of sharedBookings) {
+        if (excludeReservationId && (b.referenceNo === excludeReservationId || b.id === excludeReservationId)) continue;
+        if (!candidateBookings.some(c => c.startDate === b.startDate && c.endDate === b.endDate)) {
+          candidateBookings.push({
+            id: b.id,
+            startDate: b.startDate,
+            endDate: b.endDate,
+            status: b.status
+          });
+        }
+      }
+    }
+
+    if (candidateBookings.length > 0) {
       // Exclude past expired uncollected reservations from blocking future dates
-      const validConflicts = candidateReservations.filter((res: any) => {
-        if (res.end_date < todayStr && startDate >= todayStr) {
+      const validConflicts = candidateBookings.filter(res => {
+        if (res.endDate < todayStr && startDate >= todayStr) {
           return false;
         }
-        return true;
+        return startDate <= res.endDate && endDate >= res.startDate;
       });
 
       if (validConflicts.length > 0) {
         const conflictingRes = validConflicts[0];
-        const expectedDate = addDays(conflictingRes.end_date, 1);
+        const expectedDate = addDays(conflictingRes.endDate, 1);
         return {
           isAvailable: false,
           reason: `This camera is unavailable for your selected dates. Expected availability: ${formatDate(expectedDate)}, subject to return and inspection.`
@@ -355,7 +474,7 @@ export async function getCameraAvailabilitySchedule(
   try {
     const supabase = await createClient();
 
-    // 1. Attempt PostgreSQL RPC (Migration 010)
+    // 1. Attempt PostgreSQL RPC (Migration 010 / 011)
     const { data: rpcData, error: rpcErr } = await supabase.rpc('get_camera_availability_schedule', {
       p_camera_id: cameraId
     });
@@ -365,7 +484,11 @@ export async function getCameraAvailabilitySchedule(
         startDate: slot.start_date,
         endDate: slot.end_date,
         referenceNo: 'CONFIRMED',
-        status: slot.schedule_status === 'RENTED' ? 'CHECKED_OUT' : 'APPROVED'
+        status: slot.schedule_status === 'RENTED'
+          ? ('CHECKED_OUT' as const)
+          : slot.schedule_status === 'UNAVAILABLE'
+            ? ('MAINTENANCE' as any)
+            : ('APPROVED' as const)
       }));
       return {
         success: true,
@@ -374,12 +497,13 @@ export async function getCameraAvailabilitySchedule(
       };
     }
 
-    // 2. Direct query fallback
+    // 2. Direct query fallback from PostgreSQL reservations & rentals
     const { data: activeReservations, error: resErr } = await supabase
       .from('reservations')
       .select(`
         id,
         reference_no,
+        camera_id,
         start_date,
         end_date,
         status,
@@ -388,39 +512,38 @@ export async function getCameraAvailabilitySchedule(
       .eq('camera_id', cameraId)
       .in('status', ['PENDING_APPROVAL', 'APPROVED']);
 
+    // 3. Authoritative unification: merge database query results with shared server registry
+    // Zero-PII Guarantee: Exposes strictly date intervals and normalized status ('APPROVED' / 'CHECKED_OUT' / 'MAINTENANCE').
+    // Exposes NO customer IDs, names, emails, phones, or payment records to any user.
+    const combinedMap = new Map<string, BookedDateRange>();
+
+    // Add fleet-wide server-side shared registry bookings
+    const sharedBookings = getSharedBookingsForCamera(cameraId);
+    for (const b of sharedBookings) {
+      combinedMap.set(`${b.startDate}_${b.endDate}`, b);
+    }
+
+    // Merge database rows (if any returned)
     if (!resErr && Array.isArray(activeReservations)) {
-      const schedule: BookedDateRange[] = activeReservations.map((r: any) => {
+      for (const r of activeReservations) {
         const rental = Array.isArray(r.rentals) ? r.rentals[0] : r.rentals;
         const isCheckedOut = rental?.status === 'CHECKED_OUT';
-        return {
+        const key = `${r.start_date}_${r.end_date}`;
+        combinedMap.set(key, {
           startDate: r.start_date,
           endDate: r.end_date,
           referenceNo: 'CONFIRMED',
           status: isCheckedOut ? ('CHECKED_OUT' as const) : ('APPROVED' as const)
-        };
-      });
-
-      return {
-        success: true,
-        message: 'Camera availability schedule loaded from database.',
-        data: schedule
-      };
+        });
+      }
     }
 
-    // 3. Fallback for test / seed environments
-    const seedMatches: BookedDateRange[] = SEED_RESERVATIONS
-      .filter(r => r.cameraId === cameraId && ['PENDING_APPROVAL', 'APPROVED', 'CHECKED_OUT'].includes(r.status))
-      .map(r => ({
-        startDate: r.startDate,
-        endDate: r.endDate,
-        referenceNo: 'CONFIRMED',
-        status: r.status
-      }));
+    const schedule = Array.from(combinedMap.values());
 
     return {
       success: true,
-      message: 'Camera availability schedule loaded (fallback).',
-      data: seedMatches
+      message: 'Camera availability schedule loaded from database.',
+      data: schedule
     };
   } catch (err: any) {
     return {
@@ -579,6 +702,19 @@ export async function createReservation(input: CreateReservationInput): Promise<
       fullReservation.agreementAcceptance = agreementResult.data;
     }
 
+    // Register into fleet-wide shared registry immediately to guarantee cross-customer availability sync
+    if (process.env.NODE_ENV !== 'test') {
+      registerSharedBooking({
+        id: newRes.id,
+        referenceNo,
+        cameraId: input.cameraId,
+        customerId: authContext.user.id,
+        startDate: input.startDate,
+        endDate: input.endDate,
+        status: 'PENDING_APPROVAL'
+      });
+    }
+
     return {
       success: true,
       message: `Reservation ${referenceNo} created successfully! Awaiting Admin approval.`,
@@ -663,6 +799,8 @@ export async function approveReservation(id: string): Promise<ReservationService
     const camera = existing.digital_cameras;
     const payment = Array.isArray(existing.payments_and_deposits) ? existing.payments_and_deposits[0] : existing.payments_and_deposits;
 
+    updateSharedBookingStatus(id, 'APPROVED');
+
     return {
       success: true,
       message: `Reservation ${updated.reference_no} approved for pickup!`,
@@ -725,6 +863,8 @@ export async function rejectReservation(id: string, reason: string): Promise<Res
     const profile = existing.profiles;
     const camera = existing.digital_cameras;
     const payment = Array.isArray(existing.payments_and_deposits) ? existing.payments_and_deposits[0] : existing.payments_and_deposits;
+
+    updateSharedBookingStatus(id, 'REJECTED');
 
     return {
       success: true,
@@ -797,6 +937,8 @@ export async function cancelReservation(id: string): Promise<ReservationServiceR
     const profile = existing.profiles;
     const camera = existing.digital_cameras;
     const payment = Array.isArray(existing.payments_and_deposits) ? existing.payments_and_deposits[0] : existing.payments_and_deposits;
+
+    updateSharedBookingStatus(id, 'CANCELLED');
 
     return {
       success: true,

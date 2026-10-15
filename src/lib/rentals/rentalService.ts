@@ -16,6 +16,7 @@ import {
   CheckoutRentalInput,
   ReturnRentalInput
 } from './rentalValidation';
+import { updateSharedBookingStatus } from '../reservations/reservationService';
 
 export interface RentalServiceResult<T = any> {
   success: boolean;
@@ -402,6 +403,9 @@ export async function checkoutRental(input: CheckoutRentalInput): Promise<Rental
       authContext.profile
     );
 
+    // Sync authoritative shared calendar status
+    updateSharedBookingStatus(reservation.id, 'CHECKED_OUT');
+
     return {
       success: true,
       message: `Camera ${camera.name} (${camera.serial_number}) checked out successfully to ${reservation.profiles?.full_name || 'Customer'}.`,
@@ -527,6 +531,11 @@ export async function processReturn(input: ReturnRentalInput): Promise<RentalSer
       authContext.profile
     );
 
+    // Sync authoritative shared calendar status (clears rental hold)
+    if (rental.reservation_id) {
+      updateSharedBookingStatus(rental.reservation_id, 'RETURNED');
+    }
+
     return {
       success: true,
       message: `Return inspection completed for ${rental.digital_cameras?.name || 'Camera'}. Equipment status: ${nextCameraStatus}.`,
@@ -612,6 +621,11 @@ export async function completeRental(rentalId: string): Promise<RentalServiceRes
       rental.checkout_admin,
       rental.return_admin
     );
+
+    // Sync authoritative shared calendar status (clears completed lifecycle)
+    if (rental.reservation_id) {
+      updateSharedBookingStatus(rental.reservation_id, 'COMPLETED');
+    }
 
     return {
       success: true,

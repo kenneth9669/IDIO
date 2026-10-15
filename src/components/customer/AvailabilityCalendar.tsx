@@ -10,7 +10,7 @@ export interface BookedRange {
   startDate: string;        // YYYY-MM-DD
   endDate: string;          // YYYY-MM-DD
   referenceNo: string;
-  status: RentalStatus;
+  status: RentalStatus | 'MAINTENANCE' | 'DAMAGED';
 }
 
 export type DateStatus =
@@ -73,7 +73,7 @@ function getMonthDays(year: number, month: number): Date[] {
   return days;
 }
 
-function rangeIncludes(ymd: string, ranges: BookedRange[], status?: RentalStatus[]): boolean {
+function rangeIncludes(ymd: string, ranges: BookedRange[], status?: (RentalStatus | 'MAINTENANCE' | 'DAMAGED')[]): boolean {
   const d = parseYMD(ymd).getTime();
   return ranges.some(r => {
     if (status && !status.includes(r.status)) return false;
@@ -83,7 +83,7 @@ function rangeIncludes(ymd: string, ranges: BookedRange[], status?: RentalStatus
 
 function rangeOverlapsSelection(startYMD: string, endYMD: string, ranges: BookedRange[]): boolean {
   return ranges.some(r => {
-    if (!['PENDING_APPROVAL', 'APPROVED', 'CHECKED_OUT'].includes(r.status)) return false;
+    if (!['PENDING_APPROVAL', 'APPROVED', 'CHECKED_OUT', 'MAINTENANCE', 'DAMAGED'].includes(r.status as string)) return false;
     return startYMD <= r.endDate && endYMD >= r.startDate;
   });
 }
@@ -162,7 +162,13 @@ export const AvailabilityCalendar: React.FC<Props> = ({
 
   const getDateStatus = useCallback((ymd: string): DateStatus => {
     if (ymd < today) return 'past';
-    if (cameraUnavailable) return 'unavailable';
+
+    // Check if camera is globally unavailable or if this specific date is blocked by maintenance/damage
+    const isMaintenanceOrDamaged = rangeIncludes(ymd, bookedRanges, [
+      'MAINTENANCE' as any,
+      'DAMAGED' as any
+    ]);
+    if (cameraUnavailable || isMaintenanceOrDamaged) return 'unavailable';
 
     const isReserved = rangeIncludes(ymd, bookedRanges, [
       'PENDING_APPROVAL',
